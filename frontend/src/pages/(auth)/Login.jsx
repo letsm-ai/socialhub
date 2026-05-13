@@ -1,5 +1,5 @@
 import React from "react";
-import ComingSoon from "@/pages/ComingSoon";
+import ComingSoon from "@/components/shared/ComingSoon";
 import { useLang } from "@/contexts/LanguageContext";
 
 export default function Login() {

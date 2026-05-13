@@ -4,12 +4,12 @@
 
 :root {
     --font-heading: 'Alexandria', 'Outfit', system-ui, sans-serif;
-    --font-body: 'Cairo', 'Inter', system-ui, sans-serif;
+    --font-body: 'Tajawal', 'Cairo', system-ui, sans-serif;
 }
 
 html[lang="en"] {
     --font-heading: 'Outfit', 'Alexandria', system-ui, sans-serif;
-    --font-body: 'Inter', 'Cairo', system-ui, sans-serif;
+    --font-body: 'Inter', 'Tajawal', system-ui, sans-serif;
 }
 
 body {
