@@ -108,6 +108,8 @@ async def register(payload: RegisterRequest, response: Response):
         raise HTTPException(status_code=409, detail="Email is already registered")
 
     user_doc = new_user_doc(payload.name.strip(), email, hash_password(payload.password), role="CLIENT")
+    if payload.company_name:
+        user_doc["company_name"] = payload.company_name.strip()
     await db.users.insert_one(user_doc)
     # Provision default subscription (TRIALING on GROWTH) + empty wallet
     await db.subscriptions.insert_one(new_subscription_doc(user_doc["id"], plan_tier="GROWTH"))
