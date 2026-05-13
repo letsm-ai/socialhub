@@ -16,7 +16,7 @@ export const translations = {
       title_c: "وزد مبيعاتك بالذكاء الاصطناعي",
       subtitle:
         "سوشال هَب يربط واتساب وانستقرام وفيسبوك والبريد الإلكتروني في صندوق رسائل واحد. أتمتة الردود، تعاون فريق المبيعات، وتقارير مبيعات لحظية — كل ذلك بواجهة عربية أصيلة.",
-      cta_primary: "ابدأ مجاناً ١٤ يوم",
+      cta_primary: "ابدأ تجربتك المجانية",
       cta_secondary: "شاهد جولة المنصة",
       trust: "بدون بطاقة ائتمان · إعداد خلال ٣ دقائق · إلغاء في أي وقت",
     },
@@ -245,7 +245,7 @@ export const translations = {
       title_c: "and grow sales with AI.",
       subtitle:
         "SocialHub connects WhatsApp, Instagram, Facebook and Email into a single inbox. Automate replies, collaborate with your sales team, and get real-time reports — all with a native Arabic interface.",
-      cta_primary: "Start free 14-day trial",
+      cta_primary: "Start your free trial",
       cta_secondary: "Watch product tour",
       trust: "No credit card · 3-minute setup · Cancel anytime",
     },
