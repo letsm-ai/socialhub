@@ -333,6 +333,61 @@ async def refresh_token(request: Request, response: Response):
 
 
 # ============================
+# Channels (WhatsApp Embedded Signup)
+# ============================
+class WhatsAppConnectRequest(BaseModel):
+    waba_id: str
+    phone_number: str
+    phone_number_id: Optional[str] = None
+    business_id: Optional[str] = None
+    display_name: Optional[str] = None
+    access_token: Optional[str] = None  # received from FB SDK exchange (stored encrypted in prod)
+
+
+@api_router.get("/me/channels")
+async def list_my_channels(user: dict = Depends(_current_user)):
+    """Return the user's connected messaging channels."""
+    channels = await db.channels.find({"user_id": user["id"]}, {"_id": 0, "access_token": 0}).to_list(length=50)
+    return {"channels": channels}
+
+
+@api_router.post("/me/channels/whatsapp", status_code=201)
+async def connect_whatsapp(payload: WhatsAppConnectRequest, user: dict = Depends(_current_user)):
+    """
+    Persist a WhatsApp Business Account connection made via Facebook Embedded Signup.
+    In production, this also pushes the inbox into Chatwoot via the platform API.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    doc = {
+        "id": str(uuid.uuid4()),
+        "user_id": user["id"],
+        "provider": "whatsapp",
+        "status": "CONNECTED",
+        "waba_id": payload.waba_id,
+        "phone_number": payload.phone_number,
+        "phone_number_id": payload.phone_number_id,
+        "business_id": payload.business_id,
+        "display_name": payload.display_name or payload.phone_number,
+        "connected_at": now,
+        "updated_at": now,
+    }
+    # Upsert: one WhatsApp channel per user for MVP
+    await db.channels.update_one(
+        {"user_id": user["id"], "provider": "whatsapp"},
+        {"$set": doc},
+        upsert=True,
+    )
+    saved = await db.channels.find_one({"user_id": user["id"], "provider": "whatsapp"}, {"_id": 0, "access_token": 0})
+    return {"ok": True, "channel": saved}
+
+
+@api_router.delete("/me/channels/whatsapp")
+async def disconnect_whatsapp(user: dict = Depends(_current_user)):
+    await db.channels.delete_one({"user_id": user["id"], "provider": "whatsapp"})
+    return {"ok": True}
+
+
+# ============================
 # Stripe webhook (placeholder)
 # ============================
 @api_router.post("/stripe/webhook")

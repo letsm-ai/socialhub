@@ -3,7 +3,7 @@ import { Outlet, Link, useLocation, useNavigate } from "react-router-dom";
 import { Logo } from "@/components/Logo";
 import { useLang } from "@/contexts/LanguageContext";
 import { useAuth } from "@/contexts/AuthContext";
-import { Globe, LayoutDashboard, CreditCard, Wallet, MessageSquare, Settings, LogOut, ExternalLink } from "lucide-react";
+import { Globe, LayoutDashboard, CreditCard, Wallet, Plug, MessageSquare, Settings, LogOut, ExternalLink } from "lucide-react";
 
 /**
  * DashboardLayout - layout for the authenticated client area (/dashboard/*).
@@ -23,6 +23,7 @@ export default function DashboardLayout() {
 
   const navItems = [
     { to: "/dashboard", label: lang === "ar" ? "نظرة عامة" : "Overview", icon: LayoutDashboard, testId: "side-overview" },
+    { to: "/dashboard/channels", label: lang === "ar" ? "القنوات" : "Channels", icon: Plug, testId: "side-channels" },
     { to: "/dashboard/billing", label: lang === "ar" ? "الفوترة" : "Billing", icon: CreditCard, testId: "side-billing" },
     { to: "/dashboard/wallet", label: lang === "ar" ? "المحفظة" : "Wallet", icon: Wallet, testId: "side-wallet" },
     { to: "/dashboard/settings", label: lang === "ar" ? "الإعدادات" : "Settings", icon: Settings, testId: "side-settings" },

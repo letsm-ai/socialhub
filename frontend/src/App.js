@@ -18,6 +18,7 @@ import Register from "@/pages/(auth)/Register";
 import Dashboard from "@/pages/(dashboard)/Dashboard";
 import Billing from "@/pages/(dashboard)/Billing";
 import Wallet from "@/pages/(dashboard)/Wallet";
+import Channels from "@/pages/(dashboard)/Channels";
 import AdminDashboard from "@/pages/(admin)/AdminDashboard";
 
 function App() {
@@ -49,6 +50,7 @@ function App() {
                 <Route path="/dashboard" element={<Dashboard />} />
                 <Route path="/dashboard/billing" element={<Billing />} />
                 <Route path="/dashboard/wallet" element={<Wallet />} />
+                <Route path="/dashboard/channels" element={<Channels />} />
               </Route>
 
               {/* (admin) — ADMIN only */}
