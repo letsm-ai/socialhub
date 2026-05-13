@@ -1,7 +1,8 @@
 import React from "react";
-import { Outlet, Link, useLocation } from "react-router-dom";
+import { Outlet, Link, useLocation, useNavigate } from "react-router-dom";
 import { Logo } from "@/components/Logo";
 import { useLang } from "@/contexts/LanguageContext";
+import { useAuth } from "@/contexts/AuthContext";
 import { Globe, ShieldCheck, BarChart3, Users, Wallet, Activity, LogOut } from "lucide-react";
 
 /**
@@ -10,7 +11,14 @@ import { Globe, ShieldCheck, BarChart3, Users, Wallet, Activity, LogOut } from "
  */
 export default function AdminLayout() {
   const { t, lang, toggleLang } = useLang();
+  const { logout } = useAuth();
   const loc = useLocation();
+  const navigate = useNavigate();
+
+  const onLogout = async () => {
+    await logout();
+    navigate("/login", { replace: true });
+  };
 
   const navItems = [
     { to: "/admin", label: lang === "ar" ? "نظرة عامة" : "Overview", icon: BarChart3, testId: "admin-side-overview" },
@@ -42,6 +50,7 @@ export default function AdminLayout() {
           </button>
           <button
             data-testid="admin-logout"
+            onClick={onLogout}
             className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-stone-200 hover:text-red-400 rounded-lg hover:bg-stone-800"
           >
             <LogOut size={16} />

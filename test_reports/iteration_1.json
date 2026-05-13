@@ -1,0 +1,44 @@
+{
+  "summary": "Full backend + frontend regression for SocialHub Phase 2 auth. 17/17 pytest cases pass; 14/14 Playwright frontend checks pass. Covered register/login/logout/me, 409 dup, 422 validation, 401 wrong-pass, 429 brute-force lockout, admin seed, Subscription+Wallet provisioning, unique email index, role-based redirects (ADMIN<->/admin, CLIENT<->/dashboard, unauth->/login), logout clears localStorage token, register form validation incl. password mismatch, language toggle without crash.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/auth/logout", "issue": "Logout is server-stateless — token remains valid until JWT expiry (15 min) even after logout because no server-side revocation/blacklist. Cookies are cleared, but Bearer token in localStorage still works against /api/auth/me. Acceptable for MVP, document or implement token blacklist later."},
+      {"endpoint": "/api/chatwoot/accounts", "issue": "Accepts user_email and company_name as query params instead of JSON body (FastAPI default for non-Pydantic args). Not blocking — flagged as MOCKED stub per request."},
+      {"endpoint": "/api/stripe/webhook", "issue": "MOCKED stub — no signature verification."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_auth_flow.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "(Optional, low priority) Add server-side JWT revocation/blacklist on logout so Bearer tokens are invalidated immediately, not only after the 15-min access-token TTL.",
+    "(Optional) Switch /api/chatwoot/accounts to accept a Pydantic body model when wiring real Chatwoot integration in next phase.",
+    "(Optional) Persist `company_name` on registration — currently accepted by RegisterRequest schema but never stored on the user document (it is silently dropped). Either store it on the user doc or remove from schema."
+  ],
+  "critical_code_review_comments": [
+    "auth.py seed_admin: only updates password_hash when ADMIN_PASSWORD changes, but does not re-provision subscription/wallet if missing. Edge case if those collections get wiped. Low priority.",
+    "server.py: RegisterRequest receives optional `company_name` but it is never persisted to db.users (line 110 ignores it). Either store it or remove field.",
+    "server.py CORS: uses allow_origins=[FRONTEND_URL] with allow_credentials=True — correct, but in this k8s preview the ingress rewrites and adds `access-control-allow-origin: *`. Bearer flow used as fallback (working). No action.",
+    "auth.py login_attempts: identifier is `ip:email` and lockout is reset to 0 attempts after locking. Works as designed but consider keeping attempts non-zero to log the count.",
+    "server.py /api/auth/refresh: bare `except jwt.ExpiredSignatureError` reraises HTTPException correctly, but does not also refresh the refresh_token cookie when expiring. Minor.",
+    "No file is >700 lines; both auth.py (254) and server.py (236) are appropriately small."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_auth_flow.py (new)",
+    "/app/test_reports/pytest/pytest_results.xml (generated)"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "Admin: admin@socialhub.om / Admin@2026 (seeded). Test client created dynamically per test (test_*@test.com / Pass@1234) and cleaned up.",
+  "seed_data_creation": "All test users prefixed with 'test_' and deleted on teardown along with their subscriptions and wallets. login_attempts entries also cleared. Admin seed untouched.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Pytest suite at /app/backend/tests/test_auth_flow.py is the regression baseline — run with `REACT_APP_BACKEND_URL=https://storage-system-test.preview.emergentagent.com pytest backend/tests/test_auth_flow.py -v`. It self-cleans test_* users. Note: brute-force test locks the test email for 15 min so reusing the exact same email across runs is avoided via uuid suffix. Frontend uses Bearer token in localStorage (httpOnly cookies set but k8s ingress rewrites CORS to *). All testids in place — see Login.jsx/Register.jsx/AdminLayout/DashboardLayout.",
+  "rca of the issue": "N/A — no bugs blocking; auth flow end-to-end verified working."
+}

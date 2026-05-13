@@ -1,7 +1,8 @@
 import React from "react";
-import { Outlet, Link, useLocation } from "react-router-dom";
+import { Outlet, Link, useLocation, useNavigate } from "react-router-dom";
 import { Logo } from "@/components/Logo";
 import { useLang } from "@/contexts/LanguageContext";
+import { useAuth } from "@/contexts/AuthContext";
 import { Globe, LayoutDashboard, CreditCard, MessageSquare, Settings, LogOut } from "lucide-react";
 
 /**
@@ -11,7 +12,14 @@ import { Globe, LayoutDashboard, CreditCard, MessageSquare, Settings, LogOut } f
  */
 export default function DashboardLayout() {
   const { t, lang, toggleLang } = useLang();
+  const { user, logout } = useAuth();
   const loc = useLocation();
+  const navigate = useNavigate();
+
+  const onLogout = async () => {
+    await logout();
+    navigate("/login", { replace: true });
+  };
 
   const navItems = [
     { to: "/dashboard", label: lang === "ar" ? "نظرة عامة" : "Overview", icon: LayoutDashboard, testId: "side-overview" },
@@ -43,6 +51,7 @@ export default function DashboardLayout() {
           </button>
           <button
             data-testid="dashboard-logout"
+            onClick={onLogout}
             className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-stone-700 hover:text-red-700 rounded-lg hover:bg-red-50"
           >
             <LogOut size={16} />

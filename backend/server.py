@@ -1,94 +1,73 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Request
+"""SocialHub API — FastAPI + MongoDB."""
 from dotenv import load_dotenv
-from starlette.middleware.cors import CORSMiddleware
-from motor.motor_asyncio import AsyncIOMotorClient
-import os
-import logging
 from pathlib import Path
-from pydantic import BaseModel, Field, EmailStr, ConfigDict
-from typing import List, Optional
-import uuid
-from datetime import datetime, timezone
-
 
 ROOT_DIR = Path(__file__).parent
-load_dotenv(ROOT_DIR / '.env')
+load_dotenv(ROOT_DIR / ".env")
+
+import os
+import logging
+import uuid
+from datetime import datetime, timezone
+from typing import List, Optional
+
+from fastapi import FastAPI, APIRouter, Depends, HTTPException, Request, Response
+from starlette.middleware.cors import CORSMiddleware
+from motor.motor_asyncio import AsyncIOMotorClient
+from pydantic import BaseModel, EmailStr, Field, ConfigDict
+
+from auth import (
+    RegisterRequest, LoginRequest, UserPublic,
+    hash_password, verify_password,
+    create_access_token, create_refresh_token,
+    set_auth_cookies, clear_auth_cookies,
+    get_current_user, check_login_lockout, record_failed_login, clear_failed_logins,
+    new_user_doc, new_subscription_doc, new_wallet_doc,
+    seed_admin, ensure_indexes,
+)
 
 # MongoDB connection
-mongo_url = os.environ['MONGO_URL']
+mongo_url = os.environ["MONGO_URL"]
 client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
+db = client[os.environ["DB_NAME"]]
 
-app = FastAPI(title="SocialHub API", version="0.1.0")
+app = FastAPI(title="SocialHub API", version="0.2.0")
 api_router = APIRouter(prefix="/api")
 
 
-# =========================
-# Models (DB Schema)
-# =========================
-
-class User(BaseModel):
-    """SocialHub user account. Maps to a Chatwoot account upon subscription."""
-    model_config = ConfigDict(extra="ignore")
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    email: EmailStr
-    full_name: str
-    company_name: Optional[str] = None
-    phone: Optional[str] = None
-    role: str = "client"  # 'client' or 'admin'
-    chatwoot_account_id: Optional[int] = None
-    is_active: bool = True
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+# ============================
+# Auth dependency wrappers (inject db)
+# ============================
+async def _current_user(request: Request) -> dict:
+    return await get_current_user(request, db)
 
 
-class Subscription(BaseModel):
-    """Stripe-backed subscription for a User."""
-    model_config = ConfigDict(extra="ignore")
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    user_id: str
-    plan: str  # 'growth' | 'pro' | 'enterprise'
-    status: str = "trialing"  # trialing | active | past_due | canceled
-    stripe_customer_id: Optional[str] = None
-    stripe_subscription_id: Optional[str] = None
-    price_omr: float = 0.0
-    current_period_start: Optional[datetime] = None
-    current_period_end: Optional[datetime] = None
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+async def _current_admin(request: Request) -> dict:
+    user = await get_current_user(request, db)
+    if user.get("role") != "ADMIN":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return user
 
 
-class MessagingQuota(BaseModel):
-    """Tracks promotional message credits per user."""
-    model_config = ConfigDict(extra="ignore")
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    user_id: str
-    credits_total: int = 0
-    credits_used: int = 0
-    last_topup_at: Optional[datetime] = None
-    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+def _user_public(doc: dict) -> dict:
+    doc.pop("password_hash", None)
+    doc.pop("_id", None)
+    return doc
 
 
-# =========================
-# Request Schemas
-# =========================
-
-class LeadCapture(BaseModel):
-    """Marketing lead capture from landing page (newsletter, trial, contact sales)."""
-    email: EmailStr
-    full_name: Optional[str] = None
-    company_name: Optional[str] = None
-    phone: Optional[str] = None
-    source: str = "landing"  # landing | hero_cta | pricing_cta | contact_sales | credits
-    plan_interest: Optional[str] = None
-    locale: str = "ar"
+def _client_ip(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
 
 
-# =========================
-# Routes
-# =========================
-
+# ============================
+# Health / Root
+# ============================
 @api_router.get("/")
 async def root():
-    return {"service": "SocialHub API", "status": "ok", "version": "0.1.0"}
+    return {"service": "SocialHub API", "status": "ok", "version": "0.2.0"}
 
 
 @api_router.get("/health")
@@ -96,9 +75,21 @@ async def health():
     return {"status": "healthy", "timestamp": datetime.now(timezone.utc).isoformat()}
 
 
+# ============================
+# Lead capture (marketing)
+# ============================
+class LeadCapture(BaseModel):
+    email: EmailStr
+    full_name: Optional[str] = None
+    company_name: Optional[str] = None
+    phone: Optional[str] = None
+    source: str = "landing"
+    plan_interest: Optional[str] = None
+    locale: str = "ar"
+
+
 @api_router.post("/leads", status_code=201)
 async def capture_lead(lead: LeadCapture):
-    """Capture marketing leads from the landing page CTAs."""
     doc = lead.model_dump()
     doc["id"] = str(uuid.uuid4())
     doc["created_at"] = datetime.now(timezone.utc).isoformat()
@@ -106,68 +97,139 @@ async def capture_lead(lead: LeadCapture):
     return {"id": doc["id"], "ok": True}
 
 
-@api_router.get("/leads", response_model=List[dict])
-async def list_leads(limit: int = 100):
-    """Internal: list captured leads (admin use)."""
-    cursor = db.leads.find({}, {"_id": 0}).sort("created_at", -1).limit(limit)
-    return await cursor.to_list(length=limit)
+# ============================
+# Auth endpoints
+# ============================
+@api_router.post("/auth/register", status_code=201)
+async def register(payload: RegisterRequest, response: Response):
+    email = payload.email.lower().strip()
+    existing = await db.users.find_one({"email": email})
+    if existing:
+        raise HTTPException(status_code=409, detail="Email is already registered")
+
+    user_doc = new_user_doc(payload.name.strip(), email, hash_password(payload.password), role="CLIENT")
+    await db.users.insert_one(user_doc)
+    # Provision default subscription (TRIALING on GROWTH) + empty wallet
+    await db.subscriptions.insert_one(new_subscription_doc(user_doc["id"], plan_tier="GROWTH"))
+    await db.wallets.insert_one(new_wallet_doc(user_doc["id"]))
+
+    access = create_access_token(user_doc["id"], email, role="CLIENT")
+    refresh = create_refresh_token(user_doc["id"])
+    set_auth_cookies(response, access, refresh)
+
+    return {**_user_public(dict(user_doc)), "access_token": access}
 
 
-# ---- Stripe webhook (placeholder) ----
+@api_router.post("/auth/login")
+async def login(payload: LoginRequest, request: Request, response: Response):
+    email = payload.email.lower().strip()
+    identifier = f"{_client_ip(request)}:{email}"
+    await check_login_lockout(db, identifier)
+
+    user = await db.users.find_one({"email": email})
+    if not user or not verify_password(payload.password, user.get("password_hash", "")):
+        await record_failed_login(db, identifier)
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    await clear_failed_logins(db, identifier)
+    access = create_access_token(user["id"], user["email"], role=user["role"])
+    refresh = create_refresh_token(user["id"])
+    set_auth_cookies(response, access, refresh)
+    return {**_user_public(dict(user)), "access_token": access}
+
+
+@api_router.post("/auth/logout")
+async def logout(response: Response, _: dict = Depends(_current_user)):
+    clear_auth_cookies(response)
+    return {"ok": True}
+
+
+@api_router.get("/auth/me")
+async def me(user: dict = Depends(_current_user)):
+    return user
+
+
+@api_router.post("/auth/refresh")
+async def refresh_token(request: Request, response: Response):
+    import jwt
+    token = request.cookies.get("refresh_token")
+    if not token:
+        raise HTTPException(status_code=401, detail="No refresh token")
+    try:
+        payload = jwt.decode(token, os.environ["JWT_SECRET"], algorithms=["HS256"])
+        if payload.get("type") != "refresh":
+            raise HTTPException(status_code=401, detail="Invalid token type")
+        user = await db.users.find_one({"id": payload["sub"]}, {"_id": 0, "password_hash": 0})
+        if not user:
+            raise HTTPException(status_code=401, detail="User not found")
+        access = create_access_token(user["id"], user["email"], role=user["role"])
+        response.set_cookie(
+            key="access_token", value=access,
+            httponly=True, secure=True, samesite="none",
+            max_age=15 * 60, path="/",
+        )
+        return {"ok": True}
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Refresh token expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid refresh token")
+
+
+# ============================
+# Stripe webhook (placeholder)
+# ============================
 @api_router.post("/stripe/webhook")
 async def stripe_webhook(request: Request):
-    """
-    Placeholder Stripe webhook receiver.
-    TODO: verify signature with STRIPE_WEBHOOK_SECRET, handle:
-      - checkout.session.completed -> activate subscription + provision Chatwoot account
-      - invoice.payment_succeeded -> mark subscription active, top up message credits
-      - invoice.payment_failed -> mark past_due
-      - customer.subscription.deleted -> cancel
-    """
     payload = await request.body()
     sig_header = request.headers.get("stripe-signature")
-    event = {"received": True, "size": len(payload), "sig": bool(sig_header)}
     await db.stripe_events.insert_one({
         "id": str(uuid.uuid4()),
         "received_at": datetime.now(timezone.utc).isoformat(),
         "size": len(payload),
         "signed": bool(sig_header),
     })
-    return event
+    return {"received": True}
 
 
-# ---- Chatwoot Super Admin API (placeholder) ----
+# ============================
+# Chatwoot Super Admin (placeholder)
+# ============================
 @api_router.post("/chatwoot/accounts")
 async def create_chatwoot_account(user_email: str, company_name: str):
-    """
-    Placeholder: provisions a new Chatwoot account for the user upon subscription success.
-    TODO:
-      - Call POST {CHATWOOT_URL}/platform/api/v1/accounts with CHATWOOT_PLATFORM_API_KEY
-      - Then POST /platform/api/v1/users to create the user in that account
-      - Persist chatwoot_account_id on User
-    """
     return {
         "stub": True,
         "user_email": user_email,
         "company_name": company_name,
-        "message": "Chatwoot provisioning will be wired in next phase (needs CHATWOOT_URL + CHATWOOT_PLATFORM_API_KEY).",
+        "message": "Chatwoot provisioning will be wired in next phase.",
     }
 
 
+# ============================
+# App lifecycle
+# ============================
 app.include_router(api_router)
 
+# CORS - explicit origin required when allow_credentials=True
+frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:3000")
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
+    allow_origins=[frontend_url],
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 
+@app.on_event("startup")
+async def on_startup():
+    await ensure_indexes(db)
+    await seed_admin(db)
+    logger.info("SocialHub API started — indexes ensured, admin seeded.")
+
+
 @app.on_event("shutdown")
-async def shutdown_db_client():
+async def on_shutdown():
     client.close()
