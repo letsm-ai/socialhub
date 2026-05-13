@@ -3,7 +3,7 @@ import { Outlet, Link, useLocation, useNavigate } from "react-router-dom";
 import { Logo } from "@/components/Logo";
 import { useLang } from "@/contexts/LanguageContext";
 import { useAuth } from "@/contexts/AuthContext";
-import { Globe, LayoutDashboard, CreditCard, MessageSquare, Settings, LogOut } from "lucide-react";
+import { Globe, LayoutDashboard, CreditCard, Wallet, MessageSquare, Settings, LogOut, ExternalLink } from "lucide-react";
 
 /**
  * DashboardLayout - layout for the authenticated client area (/dashboard/*).
@@ -24,9 +24,12 @@ export default function DashboardLayout() {
   const navItems = [
     { to: "/dashboard", label: lang === "ar" ? "نظرة عامة" : "Overview", icon: LayoutDashboard, testId: "side-overview" },
     { to: "/dashboard/billing", label: lang === "ar" ? "الفوترة" : "Billing", icon: CreditCard, testId: "side-billing" },
-    { to: "/dashboard/inbox", label: lang === "ar" ? "صندوق الرسائل" : "Inbox", icon: MessageSquare, testId: "side-inbox" },
+    { to: "/dashboard/wallet", label: lang === "ar" ? "المحفظة" : "Wallet", icon: Wallet, testId: "side-wallet" },
     { to: "/dashboard/settings", label: lang === "ar" ? "الإعدادات" : "Settings", icon: Settings, testId: "side-settings" },
   ];
+
+  // Chatwoot URL - the "Inbox" sidebar item opens external Chatwoot directly
+  const chatwootUrl = process.env.REACT_APP_CHATWOOT_URL || "https://chat.socialhub.om";
 
   return (
     <div className="min-h-screen bg-[#FDFBF7]" data-testid="dashboard-layout">
@@ -82,6 +85,18 @@ export default function DashboardLayout() {
                 </Link>
               );
             })}
+            {/* Chatwoot Inbox - external link */}
+            <a
+              href={chatwootUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              data-testid="side-inbox-external"
+              className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-stone-700 hover:bg-stone-100 transition-colors"
+            >
+              <MessageSquare size={18} />
+              <span className="flex-1">{lang === "ar" ? "صندوق Chatwoot" : "Chatwoot Inbox"}</span>
+              <ExternalLink size={12} className="text-stone-400" />
+            </a>
           </nav>
         </aside>
 

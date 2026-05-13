@@ -151,6 +151,88 @@ async def me(user: dict = Depends(_current_user)):
     return user
 
 
+# Promotional message pricing — Solution Partner economics (we pay Meta)
+MESSAGE_PRICE_OMR = 0.025
+
+# Top-up packages (msg count → OMR price)
+TOPUP_PACKAGES = [
+    {"id": "basic", "messages": 500, "price_omr": 12.5, "name_ar": "أساسية", "name_en": "Basic"},
+    {"id": "pro", "messages": 2000, "price_omr": 50.0, "name_ar": "احترافية", "name_en": "Pro"},
+    {"id": "enterprise", "messages": 5000, "price_omr": 125.0, "name_ar": "مؤسسات", "name_en": "Enterprise"},
+]
+
+
+@api_router.get("/wallet/packages")
+async def list_packages():
+    return {"packages": TOPUP_PACKAGES, "price_per_message_omr": MESSAGE_PRICE_OMR}
+
+
+@api_router.get("/me/wallet")
+async def my_wallet(user: dict = Depends(_current_user)):
+    wallet = await db.wallets.find_one({"user_id": user["id"]}, {"_id": 0})
+    if not wallet:
+        wallet = new_wallet_doc(user["id"])
+        await db.wallets.insert_one(wallet)
+        wallet.pop("_id", None)
+    txns = await db.wallet_transactions.find({"user_id": user["id"]}, {"_id": 0}).sort("created_at", -1).limit(20).to_list(length=20)
+    balance = float(wallet.get("balance_omr", 0))
+    return {
+        "wallet": wallet,
+        "transactions": txns,
+        "estimated_messages_remaining": int(balance / MESSAGE_PRICE_OMR) if balance > 0 else 0,
+        "price_per_message_omr": MESSAGE_PRICE_OMR,
+    }
+
+
+class TopupRequest(BaseModel):
+    package_id: str
+
+
+@api_router.post("/me/wallet/topup")
+async def topup_wallet(payload: TopupRequest, user: dict = Depends(_current_user)):
+    """
+    MOCK Stripe checkout — instantly credits the wallet.
+    In production this would create a Stripe Checkout Session and only credit
+    after the `checkout.session.completed` webhook.
+    """
+    pkg = next((p for p in TOPUP_PACKAGES if p["id"] == payload.package_id), None)
+    if not pkg:
+        raise HTTPException(status_code=400, detail="Unknown top-up package")
+    now = datetime.now(timezone.utc).isoformat()
+    # Atomic balance + credits update
+    await db.wallets.update_one(
+        {"user_id": user["id"]},
+        {
+            "$inc": {"balance_omr": pkg["price_omr"], "promotional_credits": pkg["messages"]},
+            "$set": {"last_topup_at": now, "updated_at": now},
+        },
+        upsert=True,
+    )
+    # Record transaction
+    txn = {
+        "id": str(uuid.uuid4()),
+        "user_id": user["id"],
+        "type": "TOPUP",
+        "package_id": pkg["id"],
+        "package_name": pkg["name_en"],
+        "messages": pkg["messages"],
+        "amount_omr": pkg["price_omr"],
+        "status": "PAID",  # MOCK
+        "created_at": now,
+    }
+    await db.wallet_transactions.insert_one(dict(txn))
+    wallet = await db.wallets.find_one({"user_id": user["id"]}, {"_id": 0})
+    balance = float(wallet.get("balance_omr", 0))
+    return {
+        "ok": True,
+        "stub": True,
+        "wallet": wallet,
+        "transaction": txn,
+        "estimated_messages_remaining": int(balance / MESSAGE_PRICE_OMR),
+    }
+
+
+# ----- /me/account: aggregated dashboard view -----
 @api_router.get("/me/account")
 async def my_account(user: dict = Depends(_current_user)):
     """Aggregated view used by the client dashboard: user + subscription + wallet + chatwoot link."""
