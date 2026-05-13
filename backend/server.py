@@ -151,6 +151,79 @@ async def me(user: dict = Depends(_current_user)):
     return user
 
 
+@api_router.get("/me/account")
+async def my_account(user: dict = Depends(_current_user)):
+    """Aggregated view used by the client dashboard: user + subscription + wallet + chatwoot link."""
+    sub = await db.subscriptions.find_one({"user_id": user["id"]}, {"_id": 0})
+    wallet = await db.wallets.find_one({"user_id": user["id"]}, {"_id": 0})
+    return {
+        "user": user,
+        "subscription": sub,
+        "wallet": wallet,
+        "chatwoot_url": os.environ.get("CHATWOOT_URL", ""),
+    }
+
+
+# Plan catalog used by the billing page
+PLAN_CATALOG = [
+    {
+        "tier": "GROWTH",
+        "name_ar": "النمو",
+        "name_en": "Growth",
+        "price_omr": 35,
+        "users": 3,
+        "features_ar": ["٣ مستخدمين", "ربط واتساب + انستقرام + فيسبوك", "صندوق رسائل موحّد", "تقارير أساسية", "دعم فني بالعربية"],
+        "features_en": ["3 users", "WhatsApp + Instagram + Facebook", "Unified inbox", "Basic reports", "Arabic support"],
+    },
+    {
+        "tier": "PRO",
+        "name_ar": "المحترف",
+        "name_en": "Pro",
+        "price_omr": 75,
+        "users": 10,
+        "features_ar": ["١٠ مستخدمين", "جميع القنوات + البريد الإلكتروني", "ردود تلقائية وقواعد ذكية", "تقارير متقدمة وتحليلات", "حملات رسائل ترويجية", "دعم أولوية ٢٤/٧"],
+        "features_en": ["10 users", "All channels + Email", "Auto-replies & smart rules", "Advanced analytics", "Promotional campaigns", "Priority 24/7 support"],
+    },
+    {
+        "tier": "ENTERPRISE",
+        "name_ar": "المؤسسات",
+        "name_en": "Enterprise",
+        "price_omr": 150,
+        "users": -1,  # unlimited
+        "features_ar": ["مستخدمون غير محدودين", "روبوت ذكاء اصطناعي بالعربية", "تكامل CRM مخصّص", "API كامل ومخصص", "مدير حساب مخصّص", "اتفاقية مستوى خدمة SLA"],
+        "features_en": ["Unlimited users", "Arabic-native AI bot", "Custom CRM integration", "Full custom API", "Dedicated account manager", "SLA agreement"],
+    },
+]
+
+
+@api_router.get("/plans")
+async def list_plans():
+    return {"plans": PLAN_CATALOG}
+
+
+class UpgradeRequest(BaseModel):
+    target_tier: str  # GROWTH | PRO | ENTERPRISE
+
+
+@api_router.post("/me/subscription/upgrade")
+async def upgrade_subscription(payload: UpgradeRequest, user: dict = Depends(_current_user)):
+    """Upgrade/downgrade the user's plan tier. Stripe flow is mocked — this just updates the tier."""
+    tier = payload.target_tier.upper()
+    if tier not in {"GROWTH", "PRO", "ENTERPRISE"}:
+        raise HTTPException(status_code=400, detail="Invalid plan tier")
+    plan = next((p for p in PLAN_CATALOG if p["tier"] == tier), None)
+    if not plan:
+        raise HTTPException(status_code=400, detail="Unknown plan")
+    update_doc = {
+        "plan_tier": tier,
+        "status": "ACTIVE",
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.subscriptions.update_one({"user_id": user["id"]}, {"$set": update_doc})
+    sub = await db.subscriptions.find_one({"user_id": user["id"]}, {"_id": 0})
+    return {"ok": True, "subscription": sub, "stripe_checkout_url": None, "stub": True}
+
+
 @api_router.post("/auth/refresh")
 async def refresh_token(request: Request, response: Response):
     import jwt
