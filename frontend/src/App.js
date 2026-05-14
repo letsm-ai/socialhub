@@ -20,6 +20,7 @@ import Billing from "@/pages/(dashboard)/Billing";
 import Wallet from "@/pages/(dashboard)/Wallet";
 import Channels from "@/pages/(dashboard)/Channels";
 import AdminDashboard from "@/pages/(admin)/AdminDashboard";
+import AdminClients from "@/pages/(admin)/AdminClients";
 
 function App() {
   return (
@@ -62,6 +63,7 @@ function App() {
                 }
               >
                 <Route path="/admin" element={<AdminDashboard />} />
+                <Route path="/admin/clients" element={<AdminClients />} />
               </Route>
             </Routes>
           </BrowserRouter>

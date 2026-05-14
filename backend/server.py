@@ -333,6 +333,139 @@ async def refresh_token(request: Request, response: Response):
 
 
 # ============================
+# Admin endpoints
+# ============================
+PLAN_PRICE = {"GROWTH": 35.0, "PRO": 75.0, "ENTERPRISE": 150.0}
+
+
+@api_router.get("/admin/overview")
+async def admin_overview(admin: dict = Depends(_current_admin)):
+    """KPIs for the super-admin overview page."""
+    # MRR: sum of plan prices for ACTIVE subscriptions
+    active_subs = await db.subscriptions.find({"status": "ACTIVE"}, {"_id": 0}).to_list(length=10000)
+    trial_subs = await db.subscriptions.count_documents({"status": "TRIALING"})
+    mrr = sum(PLAN_PRICE.get(s.get("plan_tier", "GROWTH"), 0.0) for s in active_subs)
+
+    # Tier breakdown
+    tier_counts = {"GROWTH": 0, "PRO": 0, "ENTERPRISE": 0}
+    for s in active_subs:
+        tier_counts[s.get("plan_tier", "GROWTH")] = tier_counts.get(s.get("plan_tier", "GROWTH"), 0) + 1
+
+    # Wallet totals + messages
+    wallets = await db.wallets.find({}, {"_id": 0, "balance_omr": 1, "total_promotional_messages_sent": 1}).to_list(length=10000)
+    total_wallet = sum(float(w.get("balance_omr", 0) or 0) for w in wallets)
+    total_messages = sum(int(w.get("total_promotional_messages_sent", 0) or 0) for w in wallets)
+
+    total_clients = await db.users.count_documents({"role": "CLIENT"})
+
+    return {
+        "mrr_omr": round(mrr, 2),
+        "active_subscribers": len(active_subs),
+        "trialing_subscribers": trial_subs,
+        "total_clients": total_clients,
+        "total_promotional_messages_sent": total_messages,
+        "total_wallet_balance_omr": round(total_wallet, 2),
+        "tier_breakdown": tier_counts,
+    }
+
+
+@api_router.get("/admin/clients")
+async def admin_list_clients(admin: dict = Depends(_current_admin)):
+    """List all CLIENT users joined with their subscription + wallet + whatsapp channel."""
+    users = await db.users.find({"role": "CLIENT"}, {"_id": 0, "password_hash": 0}).sort("created_at", -1).to_list(length=10000)
+    user_ids = [u["id"] for u in users]
+    subs = {s["user_id"]: s async for s in db.subscriptions.find({"user_id": {"$in": user_ids}}, {"_id": 0})}
+    wallets = {w["user_id"]: w async for w in db.wallets.find({"user_id": {"$in": user_ids}}, {"_id": 0})}
+    channels = {c["user_id"]: c async for c in db.channels.find({"user_id": {"$in": user_ids}, "provider": "whatsapp"}, {"_id": 0, "access_token": 0})}
+
+    rows = []
+    for u in users:
+        sub = subs.get(u["id"]) or {}
+        wal = wallets.get(u["id"]) or {}
+        ch = channels.get(u["id"]) or {}
+        rows.append({
+            "id": u["id"],
+            "name": u.get("name", ""),
+            "email": u.get("email", ""),
+            "company_name": u.get("company_name"),
+            "is_active": u.get("is_active", True),
+            "chatwoot_account_id": u.get("chatwoot_account_id"),
+            "plan_tier": sub.get("plan_tier", "—"),
+            "status": sub.get("status", "—"),
+            "current_period_end": sub.get("current_period_end"),
+            "balance_omr": float(wal.get("balance_omr", 0) or 0),
+            "promotional_credits": int(wal.get("promotional_credits", 0) or 0),
+            "whatsapp_phone": ch.get("phone_number"),
+            "whatsapp_waba_id": ch.get("waba_id"),
+            "created_at": u.get("created_at"),
+        })
+    return {"clients": rows, "total": len(rows)}
+
+
+class AdminCreditRequest(BaseModel):
+    amount_omr: float
+    note: Optional[str] = None
+
+
+@api_router.post("/admin/clients/{client_id}/wallet/credit")
+async def admin_credit_wallet(client_id: str, payload: AdminCreditRequest, admin: dict = Depends(_current_admin)):
+    if payload.amount_omr == 0:
+        raise HTTPException(status_code=400, detail="Amount must be non-zero")
+    user = await db.users.find_one({"id": client_id})
+    if not user:
+        raise HTTPException(status_code=404, detail="Client not found")
+    now = datetime.now(timezone.utc).isoformat()
+    # Adjust both balance and equivalent credits (positive or negative)
+    credit_delta = int(payload.amount_omr / MESSAGE_PRICE_OMR)
+    await db.wallets.update_one(
+        {"user_id": client_id},
+        {
+            "$inc": {"balance_omr": payload.amount_omr, "promotional_credits": credit_delta},
+            "$set": {"last_topup_at": now if payload.amount_omr > 0 else None, "updated_at": now},
+        },
+        upsert=True,
+    )
+    txn = {
+        "id": str(uuid.uuid4()),
+        "user_id": client_id,
+        "type": "ADMIN_ADJUSTMENT",
+        "package_id": "manual",
+        "package_name": "Admin adjustment",
+        "messages": credit_delta,
+        "amount_omr": payload.amount_omr,
+        "status": "POSTED",
+        "note": payload.note,
+        "admin_id": admin["id"],
+        "created_at": now,
+    }
+    await db.wallet_transactions.insert_one(dict(txn))
+    wallet = await db.wallets.find_one({"user_id": client_id}, {"_id": 0})
+    return {"ok": True, "wallet": wallet, "transaction": txn}
+
+
+class AdminStatusRequest(BaseModel):
+    is_active: bool
+
+
+@api_router.post("/admin/clients/{client_id}/status")
+async def admin_set_status(client_id: str, payload: AdminStatusRequest, admin: dict = Depends(_current_admin)):
+    user = await db.users.find_one({"id": client_id})
+    if not user:
+        raise HTTPException(status_code=404, detail="Client not found")
+    await db.users.update_one(
+        {"id": client_id},
+        {"$set": {"is_active": payload.is_active, "updated_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    # Also flip the subscription status
+    new_status = "ACTIVE" if payload.is_active else "CANCELED"
+    await db.subscriptions.update_one(
+        {"user_id": client_id},
+        {"$set": {"status": new_status, "updated_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    return {"ok": True, "is_active": payload.is_active}
+
+
+# ============================
 # Channels (WhatsApp Embedded Signup)
 # ============================
 class WhatsAppConnectRequest(BaseModel):

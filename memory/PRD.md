@@ -36,34 +36,35 @@ SocialHub is a customer-facing marketing site + billing/subscription layer + adm
 ### Phase 1 — Marketing Landing Page  *(2026-05-13)*
 - Bilingual landing at `/` with: Navbar (glass), Hero (with live Chatwoot inbox mock), Stats bar, Features (Bento — 5 cards), How It Works (3 steps), Pricing (3 tiers + credits add-on), Testimonials, FAQ, CTA banner, Footer.
 - AR/EN switcher with full RTL ↔ LTR.
-- Logo (`سوشال هَب` + emerald glyph).
-- Stack: React + Tailwind + shadcn (Button, Accordion).
 
 ### Phase 1.5 — Project Skeleton  *(2026-05-13)*
-- Folder layout in **Route Groups** style: `pages/(marketing)`, `pages/(auth)`, `pages/(dashboard)`, `pages/(admin)`.
-- TypeScript config (`tsconfig.json`).
-- Tajawal + Cairo + Alexandria fonts.
-- Tailwind `rtl:` & `ltr:` variants enabled via plugin.
-- Four layout shells: `MarketingLayout`, `AuthLayout`, `DashboardLayout`, `AdminLayout`.
-- Stub pages with "coming soon" placeholders to keep routing intact.
+- Route-Groups folder layout, TypeScript config, Tajawal/Cairo/Alexandria fonts, Tailwind `rtl:` variant, 4 layout shells.
 
 ### Phase 2 — Auth & DB Models  *(2026-05-13)*
-- **MongoDB collections** (mirror of requested Prisma models):
-  - `users`: id, name, email, password_hash, role (CLIENT/ADMIN), chatwoot_account_id, stripe_customer_id, company_name?, created_at
-  - `subscriptions`: id, user_id, plan_tier (GROWTH/PRO/ENTERPRISE), status (TRIALING/ACTIVE/PAST_DUE/CANCELED), stripe_subscription_id, current_period_start, current_period_end
-  - `wallets`: id, user_id, balance_omr, promotional_credits, total_promotional_messages_sent
-  - Indexes: `users.email` (unique), `users.id` (unique), `subscriptions.user_id`, `wallets.user_id` (unique), `login_attempts.identifier`
-- **Auth endpoints** under `/api/auth`: register, login, logout, me, refresh
-- **Security**: bcrypt password hashing, JWT (access 15min + refresh 7d), brute-force lockout (5 attempts/15min), CORS bound to FRONTEND_URL
-- **Admin seeding** from `.env` on startup (`admin@socialhub.om` / `Admin@2026`).
-- **Frontend Auth**:
-  - `AuthContext` + axios instance with Bearer interceptor
-  - `ProtectedRoute` with role guard
-  - `/login` page (react-hook-form + zod) — `data-testid="login-*"`
-  - `/register` page with full validation incl. password strength checklist
-  - Role-based redirect: ADMIN → `/admin`, CLIENT → `/dashboard`
-  - Wired logout buttons in both dashboards
-- **Testing**: 17/17 pytest + 14/14 Playwright passing (see `/app/test_reports/iteration_1.json`).
+- MongoDB `users`, `subscriptions`, `wallets` collections (mirror of Prisma schema), JWT auth, bcrypt, brute-force lockout, admin seeding.
+- `/login` + `/register` with react-hook-form + zod, ProtectedRoute, role-based redirect.
+- Testing: 17/17 backend + 14/14 frontend passing.
+
+### Phase 3 — Client Dashboard (Overview + Billing)  *(2026-05-13)*
+- `/dashboard` — Overview with Open Inbox CTA + Plan/Status/Credits/Activity cards.
+- `/dashboard/billing` — Current plan card + 3-tier upgrade grid + smooth scroll.
+- Endpoints: `GET /api/me/account`, `GET /api/plans`, `POST /api/me/subscription/upgrade`.
+
+### Phase 4 — Wallet & Credits  *(2026-05-13)*
+- `/dashboard/wallet` — Solution Partner billing layer: Balance card, Estimated msgs (Balance / 0.025), 3 top-up packages (Basic/Pro/Enterprise), Recent transactions list.
+- Endpoints: `GET /api/wallet/packages`, `GET /api/me/wallet`, `POST /api/me/wallet/topup`.
+- **MOCKED**: top-up credits wallet instantly (no Stripe checkout yet).
+
+### Phase 5 — Channels (WhatsApp Embedded Signup)  *(2026-05-14)*
+- `/dashboard/channels` — WhatsApp connect hero card + Tech Provider/Solution Partner explainer + 5-field connected state (Phone, WABA ID, Display Name, Phone Number ID, Business ID).
+- `src/lib/facebook.js` — FB SDK loader + `launchWhatsAppSignup` using `FB.login({config_id, feature: whatsapp_embedded_signup})`.
+- Demo mode falls back to mock when `REACT_APP_FACEBOOK_APP_ID` + `REACT_APP_WA_CONFIG_ID` not set.
+- Endpoints: `GET /api/me/channels`, `POST /api/me/channels/whatsapp`, `DELETE /api/me/channels/whatsapp`.
+
+### Phase 6 — Super Admin Dashboard  *(2026-05-14)*
+- `/admin` — Platform overview with 4 KPI cards (MRR, Active Subscribers, Total Promotional Sent, Total Wallet Balances) + tier-breakdown card.
+- `/admin/clients` — shadcn `Table` data-table with sortable headers (name/email/balance/created_at), search box, plan + status filters, suspend/activate toggle, manual wallet credit/debit dialog with note.
+- Endpoints: `GET /api/admin/overview`, `GET /api/admin/clients`, `POST /api/admin/clients/{id}/status`, `POST /api/admin/clients/{id}/wallet/credit`.
 
 ## Backlog (Prioritized)
 
@@ -89,8 +90,12 @@ SocialHub is a customer-facing marketing site + billing/subscription layer + adm
 | `/` | Marketing | public | ✅ live |
 | `/login` | Auth | public | ✅ live |
 | `/register` | Auth | public | ✅ live |
-| `/dashboard` | Dashboard | CLIENT | ✅ shell only |
-| `/admin` | Admin | ADMIN | ✅ shell only |
+| `/dashboard` | Dashboard | CLIENT | ✅ live (Overview) |
+| `/dashboard/billing` | Dashboard | CLIENT | ✅ live |
+| `/dashboard/wallet` | Dashboard | CLIENT | ✅ live |
+| `/dashboard/channels` | Dashboard | CLIENT | ✅ live (WhatsApp) |
+| `/admin` | Admin | ADMIN | ✅ live (Overview) |
+| `/admin/clients` | Admin | ADMIN | ✅ live |
 
 ## Test Credentials
 See `/app/memory/test_credentials.md`.
