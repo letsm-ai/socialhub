@@ -71,7 +71,22 @@ export default function Dashboard() {
         year: "numeric", month: "long", day: "numeric",
       })
     : "—";
-  const chatwootUrl = account.chatwoot_url || "#";
+  const chatwootAccountId = account.chatwoot_account_id;
+  const chatwootError = account.chatwoot_provisioning_error;
+
+  const openInbox = async () => {
+    try {
+      const { data } = await api.post("/me/chatwoot/sso");
+      if (data.sso_url) {
+        window.open(data.sso_url, "_blank", "noopener,noreferrer");
+      }
+    } catch (e) {
+      const msg = e.response?.status === 409
+        ? (lang === "ar" ? "جاري تجهيز حسابك في Chatwoot. حاول بعد ثوانٍ." : "Your Chatwoot account is still being set up. Try again in a few seconds.")
+        : formatApiErrorDetail(e.response?.data?.detail) || e.message;
+      setError(msg);
+    }
+  };
 
   return (
     <div className="space-y-6" data-testid="dashboard-overview">
@@ -114,13 +129,11 @@ export default function Dashboard() {
           <Button
             data-testid="open-inbox-btn"
             size="lg"
-            asChild
+            onClick={openInbox}
             className="bg-amber-500 hover:bg-amber-400 text-stone-900 rounded-2xl px-6 h-14 text-base font-bold shadow-lg shadow-amber-900/30 hover:-translate-y-1 transition-all whitespace-nowrap"
           >
-            <a href={chatwootUrl} target="_blank" rel="noopener noreferrer">
-              {lang === "ar" ? "فتح Chatwoot" : "Open Chatwoot"}
-              <ExternalLink className="ms-2" size={18} />
-            </a>
+            {lang === "ar" ? "فتح Chatwoot" : "Open Chatwoot"}
+            <ExternalLink className="ms-2" size={18} />
           </Button>
         </CardContent>
       </Card>

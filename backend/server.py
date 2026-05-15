@@ -8,6 +8,7 @@ load_dotenv(ROOT_DIR / ".env")
 import os
 import logging
 import uuid
+import asyncio
 from datetime import datetime, timezone
 from typing import List, Optional
 
@@ -25,6 +26,7 @@ from auth import (
     new_user_doc, new_subscription_doc, new_wallet_doc,
     seed_admin, ensure_indexes,
 )
+import chatwoot_client
 
 # MongoDB connection
 mongo_url = os.environ["MONGO_URL"]
@@ -111,15 +113,42 @@ async def register(payload: RegisterRequest, response: Response):
     if payload.company_name:
         user_doc["company_name"] = payload.company_name.strip()
     await db.users.insert_one(user_doc)
-    # Provision default subscription (TRIALING on GROWTH) + empty wallet
     await db.subscriptions.insert_one(new_subscription_doc(user_doc["id"], plan_tier="GROWTH"))
     await db.wallets.insert_one(new_wallet_doc(user_doc["id"]))
+
+    # Fire-and-forget Chatwoot provisioning (does not block registration)
+    asyncio.create_task(_provision_chatwoot_async(user_doc["id"]))
 
     access = create_access_token(user_doc["id"], email, role="CLIENT")
     refresh = create_refresh_token(user_doc["id"])
     set_auth_cookies(response, access, refresh)
 
     return {**_user_public(dict(user_doc)), "access_token": access}
+
+
+async def _provision_chatwoot_async(user_id: str) -> None:
+    """Provision a Chatwoot account in the background. Idempotent."""
+    try:
+        user = await db.users.find_one({"id": user_id})
+        if not user or user.get("chatwoot_account_id"):
+            return
+        result = await chatwoot_client.provision_for_user(user)
+        await db.users.update_one(
+            {"id": user_id},
+            {"$set": {
+                "chatwoot_account_id": result["account_id"],
+                "chatwoot_user_id": result["user_id"],
+                "chatwoot_provisioning_error": None,
+                "chatwoot_provisioned_at": datetime.now(timezone.utc).isoformat(),
+            }},
+        )
+        logger.info("Chatwoot provisioned for user %s: account=%s", user_id, result["account_id"])
+    except Exception as e:
+        logger.exception("Chatwoot provisioning failed for user %s", user_id)
+        await db.users.update_one(
+            {"id": user_id},
+            {"$set": {"chatwoot_provisioning_error": str(e)[:500]}},
+        )
 
 
 @api_router.post("/auth/login")
@@ -243,7 +272,47 @@ async def my_account(user: dict = Depends(_current_user)):
         "subscription": sub,
         "wallet": wallet,
         "chatwoot_url": os.environ.get("CHATWOOT_URL", ""),
+        "chatwoot_account_id": user.get("chatwoot_account_id"),
+        "chatwoot_provisioning_error": user.get("chatwoot_provisioning_error"),
     }
+
+
+@api_router.post("/me/chatwoot/sso")
+async def my_chatwoot_sso(user: dict = Depends(_current_user)):
+    """Generate a fresh, one-time SSO login URL for the user's Chatwoot account."""
+    cw_user_id = user.get("chatwoot_user_id")
+    if not cw_user_id:
+        # Try to provision now if missing
+        asyncio.create_task(_provision_chatwoot_async(user["id"]))
+        raise HTTPException(status_code=409, detail="Chatwoot account is still being provisioned. Try again in a few seconds.")
+    try:
+        sso_url = await chatwoot_client.get_sso_url(int(cw_user_id))
+        return {"sso_url": sso_url}
+    except Exception as e:
+        logger.exception("SSO generation failed")
+        raise HTTPException(status_code=502, detail=f"Failed to generate Chatwoot login URL: {e}")
+
+
+@api_router.post("/admin/chatwoot/heal")
+async def admin_chatwoot_heal(admin: dict = Depends(_current_admin)):
+    """Retry Chatwoot provisioning for any client whose chatwoot_account_id is null."""
+    pending = await db.users.find(
+        {"role": "CLIENT", "chatwoot_account_id": None},
+        {"_id": 0, "id": 1, "email": 1, "name": 1},
+    ).to_list(length=1000)
+    healed = 0
+    errors = []
+    for u in pending:
+        try:
+            await _provision_chatwoot_async(u["id"])
+            fresh = await db.users.find_one({"id": u["id"]}, {"chatwoot_account_id": 1, "_id": 0})
+            if fresh and fresh.get("chatwoot_account_id"):
+                healed += 1
+            else:
+                errors.append({"id": u["id"], "email": u["email"]})
+        except Exception as e:
+            errors.append({"id": u["id"], "email": u["email"], "error": str(e)})
+    return {"ok": True, "total_pending": len(pending), "healed": healed, "errors": errors}
 
 
 # Plan catalog used by the billing page
