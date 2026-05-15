@@ -1,107 +1,120 @@
 import React from "react";
-import { Outlet, Link, useLocation, useNavigate } from "react-router-dom";
-import { Logo } from "@/components/Logo";
+import { Outlet, useNavigate, useLocation } from "react-router-dom";
+import MiniSidebar from "@/components/shared/MiniSidebar";
 import { useLang } from "@/contexts/LanguageContext";
 import { useAuth } from "@/contexts/AuthContext";
-import { Globe, LayoutDashboard, CreditCard, Wallet, Plug, MessageSquare, Settings, LogOut, ExternalLink } from "lucide-react";
+import {
+  Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
+  LayoutDashboard, Plug, CreditCard, Wallet, MessageSquare, Settings, LogOut, Globe, ChevronsLeft, ChevronsRight,
+} from "lucide-react";
 
 /**
- * DashboardLayout - layout for the authenticated client area (/dashboard/*).
- * Includes a sidebar with primary nav and a top bar.
- * Sidebar items are placeholders – wired in next phase.
+ * DashboardLayout — respond.io-style mini icon sidebar.
  */
 export default function DashboardLayout() {
   const { t, lang, toggleLang } = useLang();
   const { user, logout } = useAuth();
-  const loc = useLocation();
   const navigate = useNavigate();
-
-  const onLogout = async () => {
-    await logout();
-    navigate("/login", { replace: true });
-  };
+  const loc = useLocation();
 
   const navItems = [
     { to: "/dashboard", label: lang === "ar" ? "نظرة عامة" : "Overview", icon: LayoutDashboard, testId: "side-overview" },
     { to: "/dashboard/channels", label: lang === "ar" ? "القنوات" : "Channels", icon: Plug, testId: "side-channels" },
     { to: "/dashboard/billing", label: lang === "ar" ? "الفوترة" : "Billing", icon: CreditCard, testId: "side-billing" },
     { to: "/dashboard/wallet", label: lang === "ar" ? "المحفظة" : "Wallet", icon: Wallet, testId: "side-wallet" },
+    {
+      to: "https://letsm.io",
+      label: lang === "ar" ? "صندوق Chatwoot" : "Chatwoot Inbox",
+      icon: MessageSquare,
+      testId: "side-inbox-external",
+      external: true,
+    },
+  ];
+
+  const bottomItems = [
     { to: "/dashboard/settings", label: lang === "ar" ? "الإعدادات" : "Settings", icon: Settings, testId: "side-settings" },
   ];
 
-  // Chatwoot URL - the "Inbox" sidebar item opens external Chatwoot directly
-  const chatwootUrl = process.env.REACT_APP_CHATWOOT_URL || "https://chat.socialhub.om";
+  const onLogout = async () => {
+    await logout();
+    navigate("/login", { replace: true });
+  };
+
+  const pageTitle = (() => {
+    if (loc.pathname.startsWith("/dashboard/billing")) return lang === "ar" ? "الفوترة" : "Billing";
+    if (loc.pathname.startsWith("/dashboard/wallet")) return lang === "ar" ? "المحفظة" : "Wallet";
+    if (loc.pathname.startsWith("/dashboard/channels")) return lang === "ar" ? "القنوات" : "Channels";
+    if (loc.pathname.startsWith("/dashboard/settings")) return lang === "ar" ? "الإعدادات" : "Settings";
+    return lang === "ar" ? "نظرة عامة" : "Overview";
+  })();
 
   return (
-    <div className="min-h-screen bg-[#FDFBF7]" data-testid="dashboard-layout">
-      {/* Top bar */}
-      <header className="h-16 bg-white border-b border-stone-200 px-4 lg:px-6 flex items-center justify-between sticky top-0 z-40">
-        <div className="flex items-center gap-4">
-          <Link to="/" data-testid="dashboard-logo-link">
-            <Logo size="small" />
-          </Link>
-          <span className="hidden md:inline-block text-xs font-semibold uppercase tracking-wider text-stone-400">
-            {lang === "ar" ? "لوحة التحكم" : "Dashboard"}
-          </span>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={toggleLang}
-            data-testid="dashboard-lang-toggle"
-            className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-stone-700 hover:text-emerald-800 rounded-lg hover:bg-stone-100"
-          >
-            <Globe size={16} />
-            <span>{t("nav.langLabel")}</span>
-          </button>
-          <button
-            data-testid="dashboard-logout"
-            onClick={onLogout}
-            className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-stone-700 hover:text-red-700 rounded-lg hover:bg-red-50"
-          >
-            <LogOut size={16} />
-            <span className="hidden sm:inline">{lang === "ar" ? "خروج" : "Log out"}</span>
-          </button>
-        </div>
-      </header>
+    <div className="min-h-screen bg-[#FAF8F2] flex" data-testid="dashboard-layout" dir={lang === "ar" ? "rtl" : "ltr"}>
+      <MiniSidebar items={navItems} bottomItems={bottomItems} theme="light" />
 
-      <div className="grid grid-cols-1 md:grid-cols-[240px_1fr]">
-        {/* Sidebar */}
-        <aside className="hidden md:block bg-white border-e border-stone-200 min-h-[calc(100vh-4rem)] p-4" data-testid="dashboard-sidebar">
-          <nav className="space-y-1">
-            {navItems.map((it) => {
-              const active = loc.pathname === it.to;
-              return (
-                <Link
-                  key={it.to}
-                  to={it.to}
-                  data-testid={it.testId}
-                  className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-colors ${
-                    active
-                      ? "bg-emerald-50 text-emerald-800 border border-emerald-100"
-                      : "text-stone-700 hover:bg-stone-100"
-                  }`}
-                >
-                  <it.icon size={18} strokeWidth={active ? 2.5 : 2} />
-                  <span>{it.label}</span>
-                </Link>
-              );
-            })}
-            {/* Chatwoot Inbox - external link */}
-            <a
-              href={chatwootUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              data-testid="side-inbox-external"
-              className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-stone-700 hover:bg-stone-100 transition-colors"
-            >
-              <MessageSquare size={18} />
-              <span className="flex-1">{lang === "ar" ? "صندوق Chatwoot" : "Chatwoot Inbox"}</span>
-              <ExternalLink size={12} className="text-stone-400" />
-            </a>
-          </nav>
-        </aside>
+      <div className="flex-1 flex flex-col min-w-0">
+        {/* Top bar */}
+        <header className="h-16 bg-white border-b border-stone-200 px-5 lg:px-8 flex items-center justify-between sticky top-0 z-30">
+          <div className="flex items-center gap-3">
+            <h1 className="font-heading text-base md:text-lg font-bold text-stone-900">{pageTitle}</h1>
+            <span className="hidden md:inline-flex items-center text-[10px] font-bold uppercase tracking-wider text-stone-400 ms-2">
+              {lang === "ar" ? "لوحة التحكم" : "Workspace"}
+            </span>
+          </div>
 
-        <main className="px-4 lg:px-8 py-6 lg:py-8">
+          <div className="flex items-center gap-2">
+            <TooltipProvider delayDuration={100}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    onClick={toggleLang}
+                    data-testid="dashboard-lang-toggle"
+                    className="w-10 h-10 rounded-xl text-stone-600 hover:bg-stone-100 hover:text-emerald-800 flex items-center justify-center"
+                    aria-label="language"
+                  >
+                    <Globe size={18} />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" className="bg-stone-900 text-white border-stone-800">
+                  {lang === "ar" ? "English" : "العربية"}
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+
+            {/* User chip */}
+            <div className="hidden sm:flex items-center gap-2 ps-3 pe-1 py-1 rounded-xl bg-stone-50 border border-stone-200">
+              <div className="text-end">
+                <div className="text-xs font-semibold text-stone-900 leading-tight">{user?.name || "—"}</div>
+                <div className="text-[10px] text-stone-500 leading-tight">{user?.email}</div>
+              </div>
+              <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-emerald-700 to-emerald-900 flex items-center justify-center font-heading font-bold text-white text-sm">
+                {user?.name?.[0]?.toUpperCase() || "?"}
+              </div>
+            </div>
+
+            <TooltipProvider delayDuration={100}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    onClick={onLogout}
+                    data-testid="dashboard-logout"
+                    className="w-10 h-10 rounded-xl text-stone-600 hover:bg-red-50 hover:text-red-700 flex items-center justify-center"
+                    aria-label="logout"
+                  >
+                    <LogOut size={18} />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" className="bg-stone-900 text-white border-stone-800">
+                  {lang === "ar" ? "تسجيل الخروج" : "Log out"}
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          </div>
+        </header>
+
+        <main className="flex-1 px-4 lg:px-8 py-6 lg:py-8 max-w-[1400px] w-full mx-auto">
           <Outlet />
         </main>
       </div>
