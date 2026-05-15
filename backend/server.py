@@ -456,13 +456,146 @@ async def admin_set_status(client_id: str, payload: AdminStatusRequest, admin: d
         {"id": client_id},
         {"$set": {"is_active": payload.is_active, "updated_at": datetime.now(timezone.utc).isoformat()}},
     )
-    # Also flip the subscription status
     new_status = "ACTIVE" if payload.is_active else "CANCELED"
     await db.subscriptions.update_one(
         {"user_id": client_id},
         {"$set": {"status": new_status, "updated_at": datetime.now(timezone.utc).isoformat()}},
     )
     return {"ok": True, "is_active": payload.is_active}
+
+
+@api_router.get("/admin/billing/overview")
+async def admin_billing_overview(admin: dict = Depends(_current_admin)):
+    """Aggregated billing metrics for /admin/billing."""
+    now = datetime.now(timezone.utc)
+    this_month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
+
+    active_subs = await db.subscriptions.find({"status": "ACTIVE"}, {"_id": 0}).to_list(length=10000)
+    mrr = sum(PLAN_PRICE.get(s.get("plan_tier", "GROWTH"), 0.0) for s in active_subs)
+
+    # Topup revenue
+    all_topups = await db.wallet_transactions.find({"type": "TOPUP"}, {"_id": 0}).to_list(length=10000)
+    this_month_topups = [t for t in all_topups if t.get("created_at", "") >= this_month_start]
+
+    total_topup_revenue = sum(float(t.get("amount_omr", 0) or 0) for t in all_topups)
+    mtd_topup_revenue = sum(float(t.get("amount_omr", 0) or 0) for t in this_month_topups)
+
+    # ARPU
+    total_clients = await db.users.count_documents({"role": "CLIENT"})
+    arpu = (mrr / total_clients) if total_clients else 0
+
+    # Recent stripe events
+    stripe_events = await db.stripe_events.find({}, {"_id": 0}).sort("received_at", -1).limit(10).to_list(length=10)
+
+    return {
+        "mrr_omr": round(mrr, 2),
+        "mtd_topup_revenue_omr": round(mtd_topup_revenue, 2),
+        "ltv_topup_revenue_omr": round(total_topup_revenue, 2),
+        "arpu_omr": round(arpu, 2),
+        "active_subscribers": len(active_subs),
+        "total_topup_count": len(all_topups),
+        "stripe_events_recent": stripe_events,
+    }
+
+
+@api_router.get("/admin/transactions")
+async def admin_transactions(admin: dict = Depends(_current_admin), limit: int = 100):
+    """All wallet transactions across all clients, enriched with user info."""
+    txns = await db.wallet_transactions.find({}, {"_id": 0}).sort("created_at", -1).limit(limit).to_list(length=limit)
+    user_ids = list({t["user_id"] for t in txns})
+    users = {u["id"]: u async for u in db.users.find({"id": {"$in": user_ids}}, {"_id": 0, "id": 1, "name": 1, "email": 1})}
+    for t in txns:
+        u = users.get(t["user_id"]) or {}
+        t["user_name"] = u.get("name", "—")
+        t["user_email"] = u.get("email", "—")
+    return {"transactions": txns, "total": len(txns)}
+
+
+@api_router.get("/admin/quotas")
+async def admin_quotas(admin: dict = Depends(_current_admin)):
+    """Per-client messaging quotas: wallet + usage."""
+    users = await db.users.find({"role": "CLIENT"}, {"_id": 0, "id": 1, "name": 1, "email": 1, "is_active": 1}).to_list(length=10000)
+    uids = [u["id"] for u in users]
+    wallets = {w["user_id"]: w async for w in db.wallets.find({"user_id": {"$in": uids}}, {"_id": 0})}
+    subs = {s["user_id"]: s async for s in db.subscriptions.find({"user_id": {"$in": uids}}, {"_id": 0})}
+
+    total_sent = 0
+    total_credits = 0
+    total_balance = 0.0
+    rows = []
+    for u in users:
+        w = wallets.get(u["id"]) or {}
+        s = subs.get(u["id"]) or {}
+        sent = int(w.get("total_promotional_messages_sent", 0) or 0)
+        credits = int(w.get("promotional_credits", 0) or 0)
+        balance = float(w.get("balance_omr", 0) or 0)
+        total_sent += sent
+        total_credits += credits
+        total_balance += balance
+        rows.append({
+            "user_id": u["id"],
+            "name": u.get("name", ""),
+            "email": u.get("email", ""),
+            "is_active": u.get("is_active", True),
+            "plan_tier": s.get("plan_tier", "—"),
+            "balance_omr": balance,
+            "promotional_credits": credits,
+            "total_promotional_messages_sent": sent,
+            "last_topup_at": w.get("last_topup_at"),
+        })
+    return {
+        "rows": rows,
+        "summary": {
+            "total_messages_sent": total_sent,
+            "total_credits_remaining": total_credits,
+            "total_balance_omr": round(total_balance, 2),
+            "avg_credits_per_client": int(total_credits / len(rows)) if rows else 0,
+            "client_count": len(rows),
+        },
+    }
+
+
+class BulkGrantRequest(BaseModel):
+    credits_per_client: int = 0
+    omr_per_client: float = 0.0
+    note: Optional[str] = "Bulk admin grant"
+
+
+@api_router.post("/admin/quotas/bulk-grant")
+async def admin_bulk_grant(payload: BulkGrantRequest, admin: dict = Depends(_current_admin)):
+    """Grant the same credits/OMR to every active client (promo campaign)."""
+    if payload.credits_per_client == 0 and payload.omr_per_client == 0:
+        raise HTTPException(status_code=400, detail="Provide credits_per_client or omr_per_client")
+    clients = await db.users.find({"role": "CLIENT", "is_active": True}, {"_id": 0, "id": 1}).to_list(length=10000)
+    now = datetime.now(timezone.utc).isoformat()
+    granted = 0
+    for c in clients:
+        await db.wallets.update_one(
+            {"user_id": c["id"]},
+            {
+                "$inc": {
+                    "balance_omr": payload.omr_per_client,
+                    "promotional_credits": payload.credits_per_client,
+                },
+                "$set": {"updated_at": now},
+            },
+            upsert=True,
+        )
+        await db.wallet_transactions.insert_one({
+            "id": str(uuid.uuid4()),
+            "user_id": c["id"],
+            "type": "ADMIN_BULK_GRANT",
+            "package_id": "bulk",
+            "package_name": "Bulk grant",
+            "messages": payload.credits_per_client,
+            "amount_omr": payload.omr_per_client,
+            "status": "POSTED",
+            "note": payload.note,
+            "admin_id": admin["id"],
+            "created_at": now,
+        })
+        granted += 1
+    return {"ok": True, "granted_to": granted}
 
 
 # ============================
