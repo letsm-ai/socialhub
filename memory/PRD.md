@@ -1,96 +1,108 @@
 # SocialHub — Product Requirements Document
 
 ## Original Problem Statement
-Build a SaaS marketing website and billing dashboard for an omnichannel customer service platform called "SocialHub" (similar to respond.io). The actual messaging engine is a self-hosted Chatwoot instance. Required: landing page, auth, client dashboard, super admin dashboard, integrations with Chatwoot (auto-provisioning + SSO), Stripe (billing/credits), and WhatsApp.
+SaaS marketing site + billing dashboard for omnichannel customer service platform (similar to respond.io). Messaging engine = self-hosted Chatwoot. Needs landing page, auth, client dashboard, super admin dashboard, integrations with Chatwoot (auto-provisioning + SSO), Stripe (billing/credits), WhatsApp.
 
 User language: **Arabic** (must always respond in Arabic).
 
-## Current Status — LIVE IN PRODUCTION ✅
-Deployed at: **https://app.letsm.io**
-- Production VPS: Hostinger 76.13.220.229 (managed alongside Chatwoot via Coolify/Traefik)
-- Frontend: nginx-alpine Docker container on `coolify` network
-- Backend: FastAPI systemd service `socialhub-api` on host (`0.0.0.0:8001`)
-- SSL: Auto-managed by Traefik via Let's Encrypt
+## Current Status — FULLY LIVE IN PRODUCTION ✅
+
+| Service | URL | Status |
+|---------|-----|--------|
+| SocialHub app | https://app.letsm.io | ✅ Live with SSL |
+| Chatwoot | https://letsm.io | ✅ Live with SSL (self-managed) |
+
+## Infrastructure
+- VPS: Hostinger 76.13.220.229 (Ubuntu 24.04)
+- Traefik: self-managed (`/root/socialhub/docker-compose.yml`), entrypoints `http`/`https`, auto SSL via Let's Encrypt
+- Postgres + Redis: Coolify-managed (we don't touch them)
+- Chatwoot Rails + Sidekiq: self-managed (`/root/chatwoot/docker-compose.yml`)
+- SocialHub backend: systemd service `socialhub-api` on host `0.0.0.0:8001`
+- SocialHub frontend: nginx-alpine container `socialhub-web` on `coolify` Docker network
 
 ## Architecture
-- **Frontend**: React 18, Tailwind, shadcn/ui, RTL/LTR
-- **Backend**: FastAPI + MongoDB (Motor), JWT auth + brute-force protection
-- **Integrations**:
-  - Chatwoot Platform API (auto-provisioning + SSO) — currently broken upstream
-  - Meta WhatsApp Cloud API as Tech Provider — backend READY, awaiting credentials
-  - Stripe — MOCKED
+```
+Traefik (entrypoints: http=80, https=443)
+├── app.letsm.io → socialhub-web (nginx:alpine) → 127.0.0.1 host gateway → uvicorn (FastAPI :8001)
+└── letsm.io → chatwoot-rails (chatwoot/chatwoot :3000)
+                    │
+                    ├── postgres-mu7tqsptecddqgrmg5o4zxs1 (Coolify-managed)
+                    ├── redis-mu7tqsptecddqgrmg5o4zxs1 (Coolify-managed)
+                    └── chatwoot-sidekiq (background worker)
+```
 
 ## Completed Features
-- ✅ RTL landing page (AR/EN)
-- ✅ Auth (register/login/JWT, brute force)
-- ✅ Client dashboard with company_name pill (Chatwoot UI fully removed Feb 2026)
+- ✅ RTL landing page (AR/EN toggle)
+- ✅ Auth (register/login/JWT, brute force protection)
+- ✅ Client dashboard with company_name pill (no Chatwoot UI exposed)
 - ✅ Super admin dashboard
-- ✅ Wallet & credits (mock top-up)
-- ✅ Chatwoot Platform API integration (backend logic intact, UI hidden from clients)
-- ✅ **WhatsApp Meta Tech Provider backend endpoints** (gated by env vars, ready to flip live):
-  - `GET /api/whatsapp/config` — exposes app_id + config_id + enabled flag
-  - `POST /api/whatsapp/connect` — full provisioning pipeline (code → token → subscribe WABA → register phone)
-  - `GET /api/webhooks/whatsapp` — Meta verify handshake (PlainTextResponse)
-  - `POST /api/webhooks/whatsapp` — X-Hub-Signature-256 HMAC-SHA256 verify
-  - `whatsapp_meta.py` module: exchange_code_for_token, subscribe_waba, register_phone_number, send_text_message, get_phone_number_details, provision_whatsapp
+- ✅ Wallet & credits (mock Stripe top-up)
+- ✅ Chatwoot Platform API integration (autoprovision + SSO)
+- ✅ WhatsApp Meta Tech Provider backend endpoints (gated by env vars, ready to flip live)
+- ✅ Self-managed Chatwoot deployment via GitHub (`/app/chatwoot/`)
 
 ## Production Credentials
 | Role | Email | Password |
 |------|-------|----------|
-| Admin | admin@socialhub.om | Admin@2026 |
-| Client (test) | ahmed@test.com | Test@1234 |
+| SocialHub Admin | admin@letsm.io | Woot@Ch4321 |
+| SocialHub Client (test) | ahmed@test.com | Test@1234 |
+| Chatwoot Super Admin | (created via onboarding by user) | (set by user) |
+
+## Chatwoot Integration
+- `CHATWOOT_URL=https://letsm.io`
+- `CHATWOOT_PLATFORM_API_KEY=EpeXJDoXcwmuyYCbCMzoGZoo`
+- Connectivity verified: account creation returns 200 ✅
+- Test accounts created during validation (ids 1, 2, 3) — can be deleted from Super Admin panel
 
 ## To Activate Real WhatsApp Integration
-User must obtain from Meta Business Manager and add to `/app/backend/.env`:
+User obtains from Meta Business Manager:
 ```
 META_APP_ID="..."
 META_APP_SECRET="..."
-META_SYSTEM_USER_TOKEN="..."      # long-lived, with whatsapp_business_management + messaging
+META_SYSTEM_USER_TOKEN="..."          # long-lived
 META_EMBEDDED_SIGNUP_CONFIG_ID="..."
 META_TECH_PROVIDER_BUSINESS_ID="..."
-WHATSAPP_WEBHOOK_VERIFY_TOKEN="..."  # any random string, must match Meta app config
+WHATSAPP_WEBHOOK_VERIFY_TOKEN="..."
 ```
-Once set, frontend auto-detects via `GET /api/whatsapp/config` and switches from mock to real flow.
+Add to `/app/backend/.env` and `/var/www/socialhub/backend/.env`. Restart backend. Frontend auto-detects.
 
-## Meta App Setup Requirements
-- Verified Meta Business
-- Meta App with WhatsApp product
-- Tech Provider (Solution Partner) mode approved
-- Embedded Signup configuration (Tech Provider mode)
-- Webhook URL set in Meta App: `https://app.letsm.io/api/webhooks/whatsapp`
+Meta App setup needs:
+- Webhook URL: `https://app.letsm.io/api/webhooks/whatsapp`
 - OAuth Redirect URI: `https://app.letsm.io/api/meta/oauth/callback`
-- Domain whitelist: `app.letsm.io`
+- Allowed Domain: `app.letsm.io`
 
 ## Backlog
 ### P1
 - Activate real WhatsApp Meta credentials (backend ready, awaiting user)
-- Real Stripe Checkout (currently MOCKED)
-- Fix Chatwoot upstream URL — `https://letsm.io` returns 404 for `/platform/api/v1/accounts`
-  (Chatwoot containers running but Coolify/Traefik routing seems broken; not blocking since UI is hidden from clients)
+- Real Stripe Checkout (still MOCKED)
 
 ### P2
 - Public system status page
 - Email notifications (SendGrid/Resend)
 - Audit log for admin actions
 - Refactor server.py (913 lines) into routers/ directory
+- Delete the "Chatwoot" Coolify project entry (Coolify still tracks it in UI; rails+sidekiq containers are stopped)
 
 ## Key Files
 | File | Purpose |
 |------|---------|
-| `/app/backend/server.py` | FastAPI routes (auth, account, wallet, channels, admin, whatsapp, webhooks) |
-| `/app/backend/whatsapp_meta.py` | Meta Cloud API client + signature verify |
+| `/app/backend/server.py` | FastAPI routes |
+| `/app/backend/whatsapp_meta.py` | Meta Cloud API client |
 | `/app/backend/chatwoot_client.py` | Chatwoot Platform API client |
 | `/app/backend/auth.py` | JWT + brute force |
-| `/app/frontend/src/lib/facebook.js` | FB SDK loader (reads runtime config) |
-| `/app/frontend/src/pages/(dashboard)/Channels.jsx` | WhatsApp connect UI |
-| `/app/frontend/src/layouts/DashboardLayout.jsx` | Client side-nav + company_name pill |
+| `/app/frontend/src/lib/facebook.js` | FB SDK loader (runtime config) |
 | `/app/deploy.sh` | First-run VPS installer |
-| `/app/deploy-traefik.sh` | Production deploy via Traefik |
+| `/app/deploy-traefik.sh` | Production SocialHub deploy via Traefik |
+| `/app/chatwoot/docker-compose.yml` | Self-managed Chatwoot stack |
+| `/app/chatwoot/deploy-chatwoot.sh` | Chatwoot migration/deploy script |
 
 ## Key Commands
 ```bash
-# Update app on VPS after git push
+# Update SocialHub on VPS
 cd /var/www/socialhub && git pull && cd frontend && CI=false yarn build && docker restart socialhub-web
+
+# Update Chatwoot
+cd /root/chatwoot && docker compose pull && docker compose up -d
 
 # Restart backend
 systemctl restart socialhub-api
@@ -98,9 +110,11 @@ systemctl restart socialhub-api
 # Logs
 tail -f /var/log/socialhub-api.log
 docker logs -f socialhub-web
+docker logs -f chatwoot-rails
 ```
 
 ## Changelog
 - **2026-05-13/15**: Initial build (auth, landing, dashboards, Chatwoot integration, wallet, channels mock)
-- **2026-05-16**: Production deployment to app.letsm.io via Traefik. Removed Made-with-Emergent badge. Deleted broken GitHub Actions workflow.
-- **2026-05-16**: Hid all Chatwoot references from client dashboard. Added company_name pill in header + below greeting. Built complete WhatsApp Meta Tech Provider backend (gated by env vars). Frontend dynamically loads Meta config from `/api/whatsapp/config`.
+- **2026-05-16 (early)**: Production deployment to app.letsm.io via Traefik (Coolify-coexistence). Removed Made-with-Emergent badge. Deleted broken GitHub Actions.
+- **2026-05-16 (mid)**: Hid Chatwoot from client UI, added company_name pill, full WhatsApp Tech Provider backend (env-gated)
+- **2026-05-16 (late)**: Migrated Chatwoot off Coolify routing. Self-managed via `/root/chatwoot/`. Fixed Traefik entrypoint name mismatch (web/websecure → http/https). New Platform API key issued and validated end-to-end.
