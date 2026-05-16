@@ -1,0 +1,55 @@
+{
+  "summary": "Phase 3 full regression on SocialHub preview. Backend: 19/20 pytest cases pass (1 skipped — Chatwoot SSO blocked by upstream Chatwoot 404 during account provisioning). Frontend: all 4 admin routes, all 4 dashboard routes, language toggle (rtl<->ltr), admin login redirect, client login redirect, logout-clears-token-and-redirects, mock WhatsApp connected card, and mock wallet top-up (MOCKED Stripe path verified via API persistence) all working.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "POST /api/auth/register (background) + POST /api/me/chatwoot/sso",
+        "issue": "Chatwoot provisioning is failing for ALL newly-registered users. _provision_chatwoot_async calls POST {CHATWOOT_URL}/platform/api/v1/accounts and the upstream returns `404 page not found`. CHATWOOT_URL in backend/.env is set to `https://letsm.io` but that host returns 404 for /platform/api/v1/accounts (tested via curl, gets `404 page not found`). Older users in DB (mazin298, test_fe_9102, ahmed@test.com) already have chatwoot_account_id 4/5/6, so this used to work — config or host changed. As a result, every fresh client gets `chatwoot_provisioning_error: 'create_account 404: 404 page not found'`, and POST /api/me/chatwoot/sso returns 409 indefinitely.",
+        "priority": "CRITICAL"
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "POST /api/chatwoot/accounts",
+        "issue": "Still a stub accepting query params (flagged in iteration_1) — not wired to real Chatwoot. Not blocking since real provisioning happens via /auth/register's background task."
+      },
+      {
+        "endpoint": "POST /api/stripe/webhook",
+        "issue": "MOCK only — no signature verification. Intentional per request."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_phase3_flows.py",
+    "/app/backend/tests/test_auth_flow.py",
+    "/app/test_reports/pytest/phase3_results.xml"
+  ],
+  "action_items": [
+    "Fix CHATWOOT_URL in backend/.env — currently `https://letsm.io` returns 404 for /platform/api/v1/accounts. The Chatwoot host must be reachable and accept POST to /platform/api/v1/accounts with `api_access_token` header. Once corrected, also call POST /api/admin/chatwoot/heal to retry provisioning for all clients with `chatwoot_account_id: null`.",
+    "Note: review request mentions `/dashboard/settings` route, but it is NOT in App.js — only /dashboard, /dashboard/billing, /dashboard/wallet, /dashboard/channels are wired. Confirm with product whether Settings was renamed to Billing or whether a Settings page is still pending.",
+    "Optional: review request also mentioned admin credentials `admin@letsm.io / Woot@Ch4321` — actual seeded credentials per backend/.env are `admin@socialhub.om / Admin@2026`. Update /app/memory/test_credentials.md only if you want to align with letsm.io domain (currently test_credentials.md is consistent with .env)."
+  ],
+  "critical_code_review_comments": [
+    "server.py: _provision_chatwoot_async swallows exceptions and only writes them into `chatwoot_provisioning_error` on the user doc. This is correct for resilience, but there is no admin-visible alert; consider surfacing chatwoot_provisioning_error count in /api/admin/overview so the operator sees the misconfiguration immediately instead of users silently failing SSO.",
+    "server.py /api/me/chatwoot/sso: when provisioning failed (not pending), it still returns 409 `still being provisioned` — confusing. Should branch on `chatwoot_provisioning_error` presence and return 502 with the error so the UI can show the real problem instead of looping.",
+    "server.py has grown to 783 lines — above the 700-line guideline. Recommend splitting into routers/{auth,wallet,channels,admin,chatwoot}.py.",
+    "server.py /admin/clients (line 446-448): uses `async for s in db.subscriptions.find(...)` inside a dict comprehension. Cursor needs `.to_list()` or async iteration is fine in Python 3.6+, but mixing dict-comprehension with async-for is non-standard. Currently works in motor but readability suffers. Refactor to: `subs = {s['user_id']: s for s in await db.subscriptions.find(...).to_list(length=10000)}`.",
+    "server.py logger is referenced at line 145 inside _provision_chatwoot_async BEFORE it's defined at line 770. This works only because the function is awaited lazily after startup, but it's a latent ordering bug. Move `logger = logging.getLogger(__name__)` to the top of the file (right after imports)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_phase3_flows.py (new — 20 test cases for /me/account, wallet, channels, chatwoot sso, plans, subscription upgrade, all admin endpoints, role enforcement)",
+    "/app/test_reports/pytest/phase3_results.xml (generated)"
+  ],
+  "success_rate": {"backend": "95% (19/20, 1 skipped due to upstream Chatwoot misconfig)", "frontend": "100%"},
+  "test_credentials": "Admin: admin@socialhub.om / Admin@2026. Client: ahmed@test.com / Test@1234 (seeded — letsm.io/Woot@Ch4321 and ahmed@test.com/Ahmed@123 from review request do NOT exist; rely on test_credentials.md).",
+  "seed_data_creation": "Each test run creates a unique `test_phase3_<uuid>@test.com` CLIENT user via /api/auth/register, performs all flows (account, wallet, top-up, channels connect/disconnect, subscription upgrade, admin operations against the user), then teardown deletes the user, its subscription/wallet/channels/transactions/login_attempts via direct Mongo. Existing seeded users (mazin298, ahmed@test.com, test_fe_9102) are untouched.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Run both test files for full regression: `cd /app && pytest backend/tests/ -v --junitxml=/app/test_reports/pytest/results.xml`. The Chatwoot SSO test (test_phase3_flows.py::TestChatwootSSO) currently skips because CHATWOOT_URL host returns 404 for /platform/api/v1/accounts. After main agent fixes CHATWOOT_URL, that test should pass. Backend admin/login uses Bearer token in localStorage (httpOnly cookies set but k8s ingress rewrites CORS to *). All routes have data-testid attributes. Note: review request mentioned `/dashboard/settings` — that route does NOT exist in App.js; only /dashboard, /dashboard/billing, /dashboard/wallet, /dashboard/channels. Flagged but not failed.",
+  "rca of the issue": "Chatwoot provisioning failure RCA: CHATWOOT_URL=https://letsm.io is the marketing site, not the Chatwoot app. The Chatwoot Platform API at /platform/api/v1/accounts is hosted on a different subdomain (likely app.letsm.io or chat.letsm.io). Reproduction: 1) register any new user via POST /api/auth/register, 2) wait 5s, 3) call POST /api/me/chatwoot/sso → returns 409 forever. 4) Inspect user doc in Mongo: `chatwoot_provisioning_error: 'create_account 404: 404 page not found\\n'`. Mitigation: set CHATWOOT_URL to the actual Chatwoot host that responds to POST /platform/api/v1/accounts with 2xx when given a valid api_access_token; then call POST /api/admin/chatwoot/heal as admin to retry all pending users."
+}
