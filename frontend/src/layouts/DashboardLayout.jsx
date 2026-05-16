@@ -7,7 +7,7 @@ import {
   Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
 } from "@/components/ui/tooltip";
 import {
-  LayoutDashboard, Plug, CreditCard, Wallet, MessageSquare, Settings, LogOut, Globe, ChevronsLeft, ChevronsRight,
+  LayoutDashboard, Plug, CreditCard, Wallet, LogOut, Globe,
 } from "lucide-react";
 
 /**
@@ -24,18 +24,9 @@ export default function DashboardLayout() {
     { to: "/dashboard/channels", label: lang === "ar" ? "القنوات" : "Channels", icon: Plug, testId: "side-channels" },
     { to: "/dashboard/billing", label: lang === "ar" ? "الفوترة" : "Billing", icon: CreditCard, testId: "side-billing" },
     { to: "/dashboard/wallet", label: lang === "ar" ? "المحفظة" : "Wallet", icon: Wallet, testId: "side-wallet" },
-    {
-      to: "https://letsm.io",
-      label: lang === "ar" ? "صندوق Chatwoot" : "Chatwoot Inbox",
-      icon: MessageSquare,
-      testId: "side-inbox-external",
-      external: true,
-    },
   ];
 
-  const bottomItems = [
-    { to: "/dashboard/settings", label: lang === "ar" ? "الإعدادات" : "Settings", icon: Settings, testId: "side-settings" },
-  ];
+  const bottomItems = [];
 
   const onLogout = async () => {
     await logout();
@@ -46,7 +37,6 @@ export default function DashboardLayout() {
     if (loc.pathname.startsWith("/dashboard/billing")) return lang === "ar" ? "الفوترة" : "Billing";
     if (loc.pathname.startsWith("/dashboard/wallet")) return lang === "ar" ? "المحفظة" : "Wallet";
     if (loc.pathname.startsWith("/dashboard/channels")) return lang === "ar" ? "القنوات" : "Channels";
-    if (loc.pathname.startsWith("/dashboard/settings")) return lang === "ar" ? "الإعدادات" : "Settings";
     return lang === "ar" ? "نظرة عامة" : "Overview";
   })();
 
@@ -59,9 +49,15 @@ export default function DashboardLayout() {
         <header className="h-16 bg-white border-b border-stone-200 px-5 lg:px-8 flex items-center justify-between sticky top-0 z-30">
           <div className="flex items-center gap-3">
             <h1 className="font-heading text-base md:text-lg font-bold text-stone-900">{pageTitle}</h1>
-            <span className="hidden md:inline-flex items-center text-[10px] font-bold uppercase tracking-wider text-stone-400 ms-2">
-              {lang === "ar" ? "لوحة التحكم" : "Workspace"}
-            </span>
+            {user?.company_name && (
+              <span
+                data-testid="dashboard-company-badge"
+                className="hidden md:inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-900 bg-emerald-50 border border-emerald-200 rounded-full px-2.5 py-1 ms-2"
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-600"></span>
+                {user.company_name}
+              </span>
+            )}
           </div>
 
           <div className="flex items-center gap-2">

@@ -5,7 +5,6 @@ import { Badge } from "@/components/ui/badge";
 import { useLang } from "@/contexts/LanguageContext";
 import { useAuth, api, formatApiErrorDetail } from "@/contexts/AuthContext";
 import {
-  ExternalLink,
   Sparkles,
   CreditCard,
   Wallet,
@@ -71,22 +70,7 @@ export default function Dashboard() {
         year: "numeric", month: "long", day: "numeric",
       })
     : "—";
-  const chatwootAccountId = account.chatwoot_account_id;
-  const chatwootError = account.chatwoot_provisioning_error;
-
-  const openInbox = async () => {
-    try {
-      const { data } = await api.post("/me/chatwoot/sso");
-      if (data.sso_url) {
-        window.open(data.sso_url, "_blank", "noopener,noreferrer");
-      }
-    } catch (e) {
-      const msg = e.response?.status === 409
-        ? (lang === "ar" ? "جاري تجهيز حسابك في Chatwoot. حاول بعد ثوانٍ." : "Your Chatwoot account is still being set up. Try again in a few seconds.")
-        : formatApiErrorDetail(e.response?.data?.detail) || e.message;
-      setError(msg);
-    }
-  };
+  const companyName = account.user?.company_name || user?.company_name || "";
 
   return (
     <div className="space-y-6" data-testid="dashboard-overview">
@@ -95,48 +79,18 @@ export default function Dashboard() {
         <h1 className="font-heading text-2xl md:text-3xl font-bold text-stone-900">
           {lang === "ar" ? `أهلاً، ${user?.name?.split(" ")[0] || ""} 👋` : `Hi ${user?.name?.split(" ")[0] || ""} 👋`}
         </h1>
-        <p className="text-stone-600 mt-1 text-sm">
+        {companyName && (
+          <div data-testid="dashboard-company-name" className="mt-2 inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-50 border border-emerald-200">
+            <div className="w-1.5 h-1.5 rounded-full bg-emerald-600"></div>
+            <span className="text-xs font-semibold text-emerald-900">{companyName}</span>
+          </div>
+        )}
+        <p className="text-stone-600 mt-2 text-sm">
           {lang === "ar"
             ? "هذه نظرة سريعة على حسابك في سوشال هَب."
             : "Here's a quick view of your SocialHub account."}
         </p>
       </div>
-
-      {/* Primary CTA: Open Inbox */}
-      <Card
-        data-testid="open-inbox-card"
-        className="bg-emerald-900 text-white border-emerald-900 rounded-3xl overflow-hidden relative"
-      >
-        <div className="absolute -top-20 -end-20 w-72 h-72 bg-emerald-700 rounded-full blur-3xl opacity-50"></div>
-        <div className="absolute -bottom-24 -start-12 w-56 h-56 bg-amber-500/20 rounded-full blur-3xl"></div>
-        <CardContent className="relative p-8 flex flex-col md:flex-row items-start md:items-center gap-6 justify-between">
-          <div>
-            <div className="inline-flex items-center gap-1.5 bg-amber-500/20 border border-amber-400/30 rounded-full px-3 py-1 mb-3">
-              <Sparkles size={12} className="text-amber-300" />
-              <span className="text-[11px] font-semibold text-amber-200 uppercase tracking-wider">
-                {lang === "ar" ? "ابدأ بالرد على عملائك" : "Reply to your customers"}
-              </span>
-            </div>
-            <h2 className="font-heading text-2xl md:text-3xl font-bold mb-2">
-              {lang === "ar" ? "افتح صندوق الرسائل الموحّد" : "Open your unified inbox"}
-            </h2>
-            <p className="text-emerald-100/80 text-sm md:text-base max-w-md">
-              {lang === "ar"
-                ? "كل قنوات التواصل في شاشة واحدة عبر Chatwoot — واتساب، انستقرام، فيسبوك، البريد."
-                : "All your channels in one place via Chatwoot — WhatsApp, Instagram, Facebook, Email."}
-            </p>
-          </div>
-          <Button
-            data-testid="open-inbox-btn"
-            size="lg"
-            onClick={openInbox}
-            className="bg-amber-500 hover:bg-amber-400 text-stone-900 rounded-2xl px-6 h-14 text-base font-bold shadow-lg shadow-amber-900/30 hover:-translate-y-1 transition-all whitespace-nowrap"
-          >
-            {lang === "ar" ? "فتح Chatwoot" : "Open Chatwoot"}
-            <ExternalLink className="ms-2" size={18} />
-          </Button>
-        </CardContent>
-      </Card>
 
       {/* Stat cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
@@ -224,8 +178,8 @@ export default function Dashboard() {
           </div>
           <p className="text-xs text-stone-400 mt-5">
             {lang === "ar"
-              ? "ستظهر هذه المقاييس بعد ربط Chatwoot ووصول أول الرسائل."
-              : "These metrics will appear once Chatwoot is connected and messages start flowing."}
+              ? "ستظهر هذه المقاييس بعد ربط قناة WhatsApp ووصول أول الرسائل."
+              : "These metrics will appear once a WhatsApp channel is connected and messages start flowing."}
           </p>
         </CardContent>
       </Card>

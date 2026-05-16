@@ -27,6 +27,7 @@ from auth import (
     seed_admin, ensure_indexes,
 )
 import chatwoot_client
+import whatsapp_meta
 
 # MongoDB connection
 mongo_url = os.environ["MONGO_URL"]
@@ -720,6 +721,135 @@ async def connect_whatsapp(payload: WhatsAppConnectRequest, user: dict = Depends
 async def disconnect_whatsapp(user: dict = Depends(_current_user)):
     await db.channels.delete_one({"user_id": user["id"], "provider": "whatsapp"})
     return {"ok": True}
+
+
+# ============================
+# WhatsApp Meta Tech Provider — real integration (gated by env)
+# ============================
+class WhatsAppEmbeddedSignupRequest(BaseModel):
+    """Payload from frontend after FB.login(config_id, response_type=code) succeeds."""
+    waba_id: str
+    phone_number_id: str
+    business_id: Optional[str] = None
+    code: Optional[str] = None        # OAuth code from FB.login
+    pin: Optional[str] = "000000"     # 2FA PIN to set on the number
+
+
+@api_router.get("/whatsapp/config")
+async def whatsapp_public_config():
+    """Expose only safe Meta config to the frontend (app_id + config_id + enabled flag)."""
+    return whatsapp_meta.public_config_for_frontend()
+
+
+@api_router.post("/whatsapp/connect", status_code=201)
+async def whatsapp_connect(payload: WhatsAppEmbeddedSignupRequest, user: dict = Depends(_current_user)):
+    """
+    Real Tech-Provider provisioning flow.
+    Called by the frontend AFTER Meta's Embedded Signup popup returns
+    {waba_id, phone_number_id, business_id, code}.
+
+    If META env vars are not set, we accept the payload and persist a mock-style
+    channel (same shape as /me/channels/whatsapp) so the UI stays functional.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+
+    if whatsapp_meta.is_configured():
+        try:
+            prov = await whatsapp_meta.provision_whatsapp(
+                auth_code=payload.code,
+                waba_id=payload.waba_id,
+                phone_number_id=payload.phone_number_id,
+                business_id=payload.business_id,
+                pin=payload.pin or "000000",
+            )
+        except Exception as e:
+            logger.exception("WhatsApp provisioning failed for user %s", user.get("id"))
+            raise HTTPException(status_code=502, detail=f"meta_provisioning_failed: {e}")
+
+        doc = {
+            "id": str(uuid.uuid4()),
+            "user_id": user["id"],
+            "provider": "whatsapp",
+            "status": "CONNECTED",
+            "waba_id": prov["waba_id"],
+            "phone_number_id": prov["phone_number_id"],
+            "business_id": prov.get("business_id"),
+            "phone_number": prov.get("display_phone_number") or "—",
+            "display_name": prov.get("verified_name") or "—",
+            "quality_rating": prov.get("quality_rating"),
+            "provisioned_via": "meta_tech_provider",
+            "connected_at": now,
+            "updated_at": now,
+        }
+    else:
+        doc = {
+            "id": str(uuid.uuid4()),
+            "user_id": user["id"],
+            "provider": "whatsapp",
+            "status": "CONNECTED",
+            "waba_id": payload.waba_id,
+            "phone_number_id": payload.phone_number_id,
+            "business_id": payload.business_id,
+            "phone_number": "+968 9123 4567",
+            "display_name": user.get("company_name") or "—",
+            "provisioned_via": "mock",
+            "connected_at": now,
+            "updated_at": now,
+        }
+
+    await db.channels.update_one(
+        {"user_id": user["id"], "provider": "whatsapp"},
+        {"$set": doc},
+        upsert=True,
+    )
+    saved = await db.channels.find_one(
+        {"user_id": user["id"], "provider": "whatsapp"},
+        {"_id": 0, "access_token": 0},
+    )
+    return {"ok": True, "channel": saved}
+
+
+# ----- Webhook (Meta → SocialHub) -----
+@api_router.get("/webhooks/whatsapp")
+async def whatsapp_webhook_verify(request: Request):
+    """GET handshake — echoes hub.challenge when hub.verify_token matches."""
+    params = request.query_params
+    mode = params.get("hub.mode")
+    token = params.get("hub.verify_token")
+    challenge = params.get("hub.challenge")
+    expected = whatsapp_meta.get_config()["verify_token"]
+    if mode == "subscribe" and token and expected and token == expected:
+        try:
+            return int(challenge) if challenge is not None else ""
+        except (TypeError, ValueError):
+            return challenge or ""
+    raise HTTPException(status_code=403, detail="verify_token_mismatch")
+
+
+@api_router.post("/webhooks/whatsapp")
+async def whatsapp_webhook_event(request: Request):
+    """POST events from Meta. Verifies signature then stores the raw event for now."""
+    raw = await request.body()
+    sig = request.headers.get("x-hub-signature-256")
+
+    if whatsapp_meta.is_configured() and not whatsapp_meta.verify_signature(raw, sig):
+        logger.warning("webhook signature verification failed")
+        raise HTTPException(status_code=403, detail="invalid_signature")
+
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+
+    # Persist the event for now; downstream routing to a tenant + Chatwoot can be added later
+    await db.whatsapp_events.insert_one({
+        "id": str(uuid.uuid4()),
+        "received_at": datetime.now(timezone.utc).isoformat(),
+        "object": payload.get("object"),
+        "entry_count": len(payload.get("entry", []) or []),
+        "raw": payload,
+    })
+    return {"received": True}
 
 
 # ============================

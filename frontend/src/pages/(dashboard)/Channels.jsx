@@ -41,6 +41,11 @@ export default function Channels() {
   const [error, setError] = useState("");
   const [toast, setToast] = useState("");
   const [fbReady, setFbReady] = useState(false);
+  const [mockMode, setMockMode] = useState(true);
+
+  useEffect(() => {
+    isFacebookConfigured().then((b) => setMockMode(!b)).catch(() => setMockMode(true));
+  }, []);
 
   useEffect(() => {
     (async () => {
@@ -53,10 +58,15 @@ export default function Channels() {
         setLoading(false);
       }
     })();
-    // Preload SDK if configured
-    if (isFacebookConfigured()) {
-      loadFacebookSDK().then(() => setFbReady(true)).catch(() => {});
-    }
+    // Preload SDK if Meta is configured on the backend
+    (async () => {
+      try {
+        if (await isFacebookConfigured()) {
+          await loadFacebookSDK();
+          setFbReady(true);
+        }
+      } catch (_) { /* ignore */ }
+    })();
   }, []);
 
   const whatsapp = channels.find((c) => c.provider === "whatsapp");
@@ -65,28 +75,29 @@ export default function Channels() {
     setError("");
     setConnecting(true);
     try {
+      const metaEnabled = await isFacebookConfigured();
       let session;
-      if (isFacebookConfigured()) {
+      if (metaEnabled) {
         // Real FB Embedded Signup flow
         session = await launchWhatsAppSignup();
       } else {
-        // Mock flow (no FB credentials yet) — simulate user completing signup
+        // Mock flow (no Meta credentials yet) — simulate user completing signup
         await new Promise((r) => setTimeout(r, 1500));
         session = {
           waba_id: "1234567890123456",
           phone_number_id: "987654321098765",
           business_id: "5566778899001122",
+          code: null,
         };
       }
-      // Persist to backend (in real flow we'd also exchange the FB code for a long-lived token)
+      // Hit the real provisioning endpoint — backend handles both modes
       const payload = {
         waba_id: session.waba_id,
-        phone_number: lang === "ar" ? "+968 9123 4567" : "+968 9123 4567",
         phone_number_id: session.phone_number_id,
         business_id: session.business_id,
-        display_name: lang === "ar" ? "متجر تجريبي" : "Sample Store",
+        code: session.code,
       };
-      const { data } = await api.post("/me/channels/whatsapp", payload);
+      const { data } = await api.post("/whatsapp/connect", payload);
       setChannels((cs) => [...cs.filter((c) => c.provider !== "whatsapp"), data.channel]);
       setToast(
         lang === "ar"
@@ -94,6 +105,8 @@ export default function Channels() {
           : "🎉 WhatsApp number connected successfully!"
       );
       setTimeout(() => setToast(""), 5000);
+      // Refresh mock indicator
+      setMockMode(!metaEnabled);
     } catch (e) {
       const msg = e?.message === "USER_CANCELLED"
         ? (lang === "ar" ? "تم إلغاء العملية." : "Signup cancelled.")
@@ -148,7 +161,7 @@ export default function Channels() {
           onConnect={connectWhatsApp}
           connecting={connecting}
           fbReady={fbReady}
-          mock={!isFacebookConfigured()}
+          mock={mockMode}
           lang={lang}
         />
       ) : (
@@ -222,7 +235,7 @@ const WhatsAppConnectCard = ({ onConnect, connecting, fbReady, mock, lang }) => 
           {[
             lang === "ar" ? "رقم WhatsApp Business موثّق رسمياً" : "Officially verified WhatsApp Business number",
             lang === "ar" ? "لا تحتاج لتطبيقات أو رموز QR" : "No app installs or QR codes required",
-            lang === "ar" ? "تظهر الرسائل فوراً في Chatwoot" : "Messages flow into Chatwoot immediately",
+            lang === "ar" ? "تظهر الرسائل فوراً في صندوقك الموحّد" : "Messages flow into your unified inbox immediately",
           ].map((t, i) => (
             <li key={i} className="flex items-start gap-2 text-sm text-emerald-50">
               <div className="flex-shrink-0 w-5 h-5 rounded-full bg-emerald-700/40 flex items-center justify-center mt-0.5">
@@ -331,17 +344,6 @@ const WhatsAppConnectedCard = ({ channel, onDisconnect, lang }) => {
               </CardDescription>
             </div>
           </div>
-          <Button
-            data-testid="open-chatwoot-from-channel"
-            variant="outline"
-            className="rounded-xl border-stone-300 hover:border-emerald-700 hover:text-emerald-800"
-            asChild
-          >
-            <a href="https://chat.socialhub.om" target="_blank" rel="noopener noreferrer">
-              {lang === "ar" ? "فتح Chatwoot" : "Open Chatwoot"}
-              <ExternalLink size={14} className="ms-2" />
-            </a>
-          </Button>
         </div>
       </CardHeader>
       <CardContent className="p-6">
