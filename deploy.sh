@@ -55,14 +55,21 @@ if ! command -v yarn >/dev/null 2>&1; then
 fi
 
 # -------------------------------------------------------------
-# 3. MongoDB 7
+# 3. MongoDB 8 (supports Ubuntu 22.04 jammy & 24.04 noble)
 # -------------------------------------------------------------
 if ! command -v mongod >/dev/null 2>&1; then
-  log "Installing MongoDB 7.0..."
+  log "Installing MongoDB 8.0..."
   UBUNTU_CODENAME=$(lsb_release -cs)
-  curl -fsSL https://www.mongodb.org/static/pgp/server-7.0.asc | gpg --dearmor -o /usr/share/keyrings/mongo-7.gpg
-  echo "deb [signed-by=/usr/share/keyrings/mongo-7.gpg] https://repo.mongodb.org/apt/ubuntu ${UBUNTU_CODENAME}/mongodb-org/7.0 multiverse" \
-       > /etc/apt/sources.list.d/mongodb-7.list
+  # MongoDB 8.0 supports jammy (22.04) and noble (24.04); fall back to jammy if codename unknown
+  case "$UBUNTU_CODENAME" in
+    jammy|noble) MONGO_CODENAME="$UBUNTU_CODENAME" ;;
+    *)           MONGO_CODENAME="jammy" ;;
+  esac
+  # Clean any older mongo lists from previous failed runs
+  rm -f /etc/apt/sources.list.d/mongodb-*.list /usr/share/keyrings/mongo-*.gpg
+  curl -fsSL https://www.mongodb.org/static/pgp/server-8.0.asc | gpg --dearmor -o /usr/share/keyrings/mongo-8.gpg
+  echo "deb [signed-by=/usr/share/keyrings/mongo-8.gpg] https://repo.mongodb.org/apt/ubuntu ${MONGO_CODENAME}/mongodb-org/8.0 multiverse" \
+       > /etc/apt/sources.list.d/mongodb-8.list
   apt-get update -y
   apt-get install -y mongodb-org
 fi
