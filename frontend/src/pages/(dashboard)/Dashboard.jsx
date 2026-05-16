@@ -13,6 +13,7 @@ import {
   AlertCircle,
   Clock,
   Loader2,
+  ExternalLink,
 } from "lucide-react";
 import { Link } from "react-router-dom";
 
@@ -72,6 +73,17 @@ export default function Dashboard() {
     : "—";
   const companyName = account.user?.company_name || user?.company_name || "";
 
+  const openInbox = async () => {
+    try {
+      const { data } = await api.post("/me/chatwoot/sso");
+      if (data.sso_url) {
+        window.open(data.sso_url, "_blank", "noopener,noreferrer");
+        return;
+      }
+    } catch (_) { /* fall through to direct open */ }
+    window.open("https://letsm.io", "_blank", "noopener,noreferrer");
+  };
+
   return (
     <div className="space-y-6" data-testid="dashboard-overview">
       {/* Greeting */}
@@ -91,6 +103,42 @@ export default function Dashboard() {
             : "Here's a quick view of your SocialHub account."}
         </p>
       </div>
+
+      {/* Primary CTA: Open Inbox */}
+      <Card
+        data-testid="open-inbox-card"
+        className="bg-emerald-900 text-white border-emerald-900 rounded-3xl overflow-hidden relative"
+      >
+        <div className="absolute -top-20 -end-20 w-72 h-72 bg-emerald-700 rounded-full blur-3xl opacity-50"></div>
+        <div className="absolute -bottom-24 -start-12 w-56 h-56 bg-amber-500/20 rounded-full blur-3xl"></div>
+        <CardContent className="relative p-8 flex flex-col md:flex-row items-start md:items-center gap-6 justify-between">
+          <div>
+            <div className="inline-flex items-center gap-1.5 bg-amber-500/20 border border-amber-400/30 rounded-full px-3 py-1 mb-3">
+              <Sparkles size={12} className="text-amber-300" />
+              <span className="text-[11px] font-semibold text-amber-200 uppercase tracking-wider">
+                {lang === "ar" ? "ابدأ بالرد على عملائك" : "Reply to your customers"}
+              </span>
+            </div>
+            <h2 className="font-heading text-2xl md:text-3xl font-bold mb-2">
+              {lang === "ar" ? "افتح صندوق الرسائل الموحّد" : "Open your unified inbox"}
+            </h2>
+            <p className="text-emerald-100/80 text-sm md:text-base max-w-md">
+              {lang === "ar"
+                ? "كل قنوات التواصل في شاشة واحدة — واتساب، انستقرام، فيسبوك، البريد."
+                : "All your channels in one place — WhatsApp, Instagram, Facebook, Email."}
+            </p>
+          </div>
+          <Button
+            data-testid="open-inbox-btn"
+            size="lg"
+            onClick={openInbox}
+            className="bg-amber-500 hover:bg-amber-400 text-stone-900 rounded-2xl px-6 h-14 text-base font-bold shadow-lg shadow-amber-900/30 hover:-translate-y-1 transition-all whitespace-nowrap"
+          >
+            {lang === "ar" ? "فتح صندوق الرسائل" : "Open Inbox"}
+            <ExternalLink className="ms-2" size={18} />
+          </Button>
+        </CardContent>
+      </Card>
 
       {/* Stat cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-5">

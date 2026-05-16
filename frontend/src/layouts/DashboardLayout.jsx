@@ -7,7 +7,7 @@ import {
   Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
 } from "@/components/ui/tooltip";
 import {
-  LayoutDashboard, Plug, CreditCard, Wallet, LogOut, Globe,
+  LayoutDashboard, Plug, CreditCard, Wallet, MessageSquare, LogOut, Globe,
 } from "lucide-react";
 
 /**
@@ -24,6 +24,13 @@ export default function DashboardLayout() {
     { to: "/dashboard/channels", label: lang === "ar" ? "القنوات" : "Channels", icon: Plug, testId: "side-channels" },
     { to: "/dashboard/billing", label: lang === "ar" ? "الفوترة" : "Billing", icon: CreditCard, testId: "side-billing" },
     { to: "/dashboard/wallet", label: lang === "ar" ? "المحفظة" : "Wallet", icon: Wallet, testId: "side-wallet" },
+    {
+      to: "https://letsm.io",
+      label: lang === "ar" ? "صندوق الرسائل" : "Inbox",
+      icon: MessageSquare,
+      testId: "side-inbox-external",
+      external: true,
+    },
   ];
 
   const bottomItems = [];
