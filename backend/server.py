@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import FastAPI, APIRouter, Depends, HTTPException, Request, Response
+from fastapi.responses import PlainTextResponse
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, EmailStr, Field, ConfigDict
@@ -812,17 +813,14 @@ async def whatsapp_connect(payload: WhatsAppEmbeddedSignupRequest, user: dict = 
 # ----- Webhook (Meta → SocialHub) -----
 @api_router.get("/webhooks/whatsapp")
 async def whatsapp_webhook_verify(request: Request):
-    """GET handshake — echoes hub.challenge when hub.verify_token matches."""
+    """GET handshake — echoes hub.challenge (plain text) when hub.verify_token matches."""
     params = request.query_params
     mode = params.get("hub.mode")
     token = params.get("hub.verify_token")
-    challenge = params.get("hub.challenge")
+    challenge = params.get("hub.challenge") or ""
     expected = whatsapp_meta.get_config()["verify_token"]
     if mode == "subscribe" and token and expected and token == expected:
-        try:
-            return int(challenge) if challenge is not None else ""
-        except (TypeError, ValueError):
-            return challenge or ""
+        return PlainTextResponse(challenge, status_code=200)
     raise HTTPException(status_code=403, detail="verify_token_mismatch")
 
 
