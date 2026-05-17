@@ -104,6 +104,45 @@ export default function Dashboard() {
         </p>
       </div>
 
+      {/* Trial banner — shows during the 7-day free trial */}
+      {account.trial?.active && (
+        <div
+          data-testid="trial-banner"
+          className="rounded-3xl border border-amber-300 bg-gradient-to-l from-amber-50 via-amber-50 to-white p-5 md:p-6 flex flex-col md:flex-row items-start md:items-center gap-4 justify-between"
+        >
+          <div className="flex items-start gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-amber-500 text-white flex items-center justify-center shrink-0">
+              <Sparkles size={20} />
+            </div>
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="font-heading font-bold text-stone-900 text-base md:text-lg">
+                  {lang === "ar" ? "أنت في التجربة المجانية ٧ أيام" : "You're on the 7-day free trial"}
+                </span>
+                <Badge className="bg-amber-500 hover:bg-amber-500 text-white border-0 text-[11px]">
+                  {lang === "ar"
+                    ? `${account.trial.days_remaining} يوم متبقّي`
+                    : `${account.trial.days_remaining} day${account.trial.days_remaining === 1 ? "" : "s"} left`}
+                </Badge>
+              </div>
+              <p className="text-stone-700 text-sm mt-1.5">
+                {lang === "ar"
+                  ? `هدية ترحيب: ${account.trial.welcome_gift_messages} رسالة مجانية في محفظتك — جرّب جميع القنوات بدون قيود.`
+                  : `Welcome gift: ${account.trial.welcome_gift_messages} free messages in your wallet — try every channel, no limits.`}
+              </p>
+            </div>
+          </div>
+          <Link to="/dashboard/billing">
+            <Button
+              data-testid="trial-banner-upgrade-btn"
+              className="bg-stone-900 hover:bg-stone-800 text-white rounded-full px-5"
+            >
+              {lang === "ar" ? "ترقية الباقة" : "Upgrade plan"}
+            </Button>
+          </Link>
+        </div>
+      )}
+
       {/* Primary CTA: Open Inbox */}
       <Card
         data-testid="open-inbox-card"

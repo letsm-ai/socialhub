@@ -113,6 +113,7 @@ docker logs -f chatwoot-rails
 ```
 
 ## Changelog
+- **2026-05-17 evening (later)**: Trial banner UI added to `Dashboard.jsx` (shows days remaining + welcome gift messages, only when `trial.active`). GitHub Actions auto-deploy workflow `.github/workflows/deploy.yml` created (SSH → git pull → pip install → restart systemd → yarn build → docker restart). `DEPLOY.md` documents the one-time secrets setup.
 - **2026-05-13/15**: Initial build (auth, landing, dashboards, Chatwoot, wallet, channels mock)
 - **2026-05-16 early**: Production deploy to app.letsm.io via Traefik (Coolify-coexistence). Removed Made-with-Emergent badge. Deleted broken GitHub Actions.
 - **2026-05-16 mid**: Hid Chatwoot from client UI, added company_name pill, WhatsApp Tech Provider backend (env-gated)

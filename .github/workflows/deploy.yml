@@ -1,0 +1,74 @@
+name: Deploy to VPS
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Pull, build, restart
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Trigger remote deploy over SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          command_timeout: 12m
+          script: |
+            set -euo pipefail
+
+            APP_DIR="/var/www/socialhub"
+            echo ">>> Deploy started at $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+
+            cd "$APP_DIR"
+
+            echo ">>> Stashing any local changes (safety net)"
+            git stash --include-untracked || true
+
+            echo ">>> Pulling latest from main"
+            git fetch --all --prune
+            git checkout main
+            git reset --hard origin/main
+
+            echo ">>> Installing/refreshing backend Python deps"
+            ./backend/venv/bin/pip install -q --upgrade pip
+            ./backend/venv/bin/pip install -q -r backend/requirements.txt
+
+            echo ">>> Restarting backend (systemd)"
+            systemctl restart socialhub-api
+            sleep 3
+            systemctl is-active --quiet socialhub-api || (echo "Backend failed to start" && journalctl -u socialhub-api -n 80 --no-pager && exit 1)
+
+            echo ">>> Building frontend"
+            cd "$APP_DIR/frontend"
+            yarn install --frozen-lockfile
+            CI=false yarn build
+
+            echo ">>> Restarting frontend container"
+            docker restart socialhub-web
+
+            echo ">>> Smoke test"
+            sleep 2
+            curl -fsS http://127.0.0.1:8001/api/payments/config > /dev/null && echo "API OK" || (echo "API smoke test failed" && exit 1)
+
+            echo ">>> Deploy finished successfully at $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+
+      - name: Deploy summary
+        if: always()
+        run: |
+          if [ "${{ job.status }}" = "success" ]; then
+            echo "Production deployment to app.letsm.io succeeded" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "Production deployment FAILED — check logs above" >> $GITHUB_STEP_SUMMARY
+          fi
