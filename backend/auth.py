@@ -211,8 +211,10 @@ def new_subscription_doc(user_id: str, plan_tier: str = "GROWTH") -> dict:
         "plan_tier": plan_tier,
         "status": "TRIALING",  # TRIALING | ACTIVE | PAST_DUE | CANCELED
         "stripe_subscription_id": None,
+        "trial_started_at": now.isoformat(),
+        "trial_ends_at": (now + timedelta(days=7)).isoformat(),
         "current_period_start": now.isoformat(),
-        "current_period_end": (now + timedelta(days=14)).isoformat(),
+        "current_period_end": (now + timedelta(days=7)).isoformat(),
         "created_at": now.isoformat(),
     }
 
@@ -222,8 +224,10 @@ def new_wallet_doc(user_id: str) -> dict:
         "id": str(uuid.uuid4()),
         "user_id": user_id,
         "balance_omr": 0.0,
-        "promotional_credits": 0,
+        "promotional_credits": 50,  # 50 welcome messages (gift)
+        "promotional_credits_initial": 50,
         "total_promotional_messages_sent": 0,
+        "welcome_gift_at": datetime.now(timezone.utc).isoformat(),
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
 

@@ -421,10 +421,33 @@ async def my_account(user: dict = Depends(_current_user)):
     """Aggregated view used by the client dashboard: user + subscription + wallet + chatwoot link."""
     sub = await db.subscriptions.find_one({"user_id": user["id"]}, {"_id": 0})
     wallet = await db.wallets.find_one({"user_id": user["id"]}, {"_id": 0})
+
+    # Compute trial countdown info
+    trial = None
+    if sub and sub.get("status") == "TRIALING" and sub.get("trial_ends_at"):
+        try:
+            ends_at = datetime.fromisoformat(sub["trial_ends_at"])
+            now = datetime.now(timezone.utc)
+            remaining = ends_at - now
+            seconds = int(remaining.total_seconds())
+            days = max(0, seconds // 86400)
+            hours = max(0, (seconds % 86400) // 3600)
+            trial = {
+                "active": seconds > 0,
+                "days_remaining": days,
+                "hours_remaining": hours,
+                "total_seconds_remaining": max(0, seconds),
+                "trial_ends_at": sub["trial_ends_at"],
+                "welcome_gift_messages": wallet.get("promotional_credits_initial", 0) if wallet else 0,
+            }
+        except Exception:
+            trial = None
+
     return {
         "user": user,
         "subscription": sub,
         "wallet": wallet,
+        "trial": trial,
         "chatwoot_url": os.environ.get("CHATWOOT_URL", ""),
         "chatwoot_account_id": user.get("chatwoot_account_id"),
         "chatwoot_provisioning_error": user.get("chatwoot_provisioning_error"),
