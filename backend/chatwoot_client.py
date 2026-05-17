@@ -298,3 +298,57 @@ async def seed_demo_conversations(account_id: int, user_token: str, lang: str = 
             summary["conversations"].append({"contact": sc["name"], "error": str(e)})
 
     return summary
+
+
+# Random demo messages for "simulate new message" feature
+_DEMO_INCOMING_MESSAGES_AR = [
+    {"name": "خالد العبري", "phone": "+96894567890", "msg": "السلام عليكم، عندكم خصومات على المنتجات الجديدة؟"},
+    {"name": "نورا الزدجالية", "phone": "+96895678901", "msg": "كم سعر العباية رقم 7؟ وهل يوجد لون كحلي؟"},
+    {"name": "ياسر السيابي", "phone": "+96896789012", "msg": "كنت طلبت طلب أمس، متى يتم الشحن؟"},
+    {"name": "هدى الراشدية", "phone": "+96897890123", "msg": "أبغى أرجّع منتج، كيف العملية؟"},
+    {"name": "ماجد الحبسي", "phone": "+96898901234", "msg": "هل توصلون لصلالة؟ وما تكلفة الشحن؟"},
+    {"name": "ريم الكلباني", "phone": "+96899012345", "msg": "السلام عليكم، عندكم متجر فيزيكال؟"},
+    {"name": "أحمد البوسعيدي", "phone": "+96894123987", "msg": "أبغى أكمل طلب رقم #7821، كيف أدفع؟"},
+    {"name": "سارة الكنود", "phone": "+96895234876", "msg": "Hi, do you ship internationally?"},
+]
+
+
+async def simulate_incoming_message(account_id: int, user_token: str, inbox_id: int) -> dict:
+    """
+    Picks a random demo persona and either:
+      (a) creates a brand-new contact + conversation with their first message, OR
+      (b) appends a new incoming message to an existing demo conversation.
+    Returns {ok, conversation_id, contact_name, message}.
+    """
+    import random
+    persona = random.choice(_DEMO_INCOMING_MESSAGES_AR)
+
+    try:
+        # Always create a NEW contact + conversation so the agent sees a fresh notification
+        suffix = secrets.token_hex(3)
+        contact = await create_contact(
+            account_id, user_token, inbox_id,
+            persona["name"], persona["phone"][:-3] + suffix[:3],
+        )
+        contact_data = contact.get("payload", {}).get("contact", {})
+        contact_id = contact_data.get("id")
+        source_id = None
+        for ci in contact_data.get("contact_inboxes", []):
+            if ci.get("inbox", {}).get("id") == inbox_id:
+                source_id = ci.get("source_id")
+                break
+        if not contact_id:
+            raise ChatwootError("contact creation returned no id")
+        conv = await create_conversation(
+            account_id, user_token, inbox_id, contact_id,
+            source_id or f"sim-{suffix}", persona["msg"],
+        )
+        return {
+            "ok": True,
+            "conversation_id": conv.get("id"),
+            "contact_name": persona["name"],
+            "message": persona["msg"],
+        }
+    except Exception as e:
+        logger.warning("simulate_incoming_message failed: %s", e)
+        return {"ok": False, "error": str(e)}

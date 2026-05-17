@@ -730,6 +730,34 @@ async def disconnect_whatsapp(user: dict = Depends(_current_user)):
     return {"ok": True}
 
 
+@api_router.post("/me/channels/whatsapp/demo/simulate")
+async def whatsapp_demo_simulate(user: dict = Depends(_current_user)):
+    """
+    Simulates a brand-new incoming WhatsApp message into the user's demo Chatwoot inbox.
+    Only works for users with an active demo channel + seeded inbox.
+    """
+    channel = await db.channels.find_one(
+        {"user_id": user["id"], "provider": "whatsapp", "is_demo": True},
+        {"_id": 0},
+    )
+    if not channel:
+        raise HTTPException(status_code=400, detail="no_demo_channel")
+
+    fresh = await db.users.find_one({"id": user["id"]}, {"_id": 0})
+    inbox_id = fresh.get("chatwoot_demo_inbox_id")
+    cw_account_id = fresh.get("chatwoot_account_id")
+    cw_token = fresh.get("chatwoot_access_token")
+    if not (inbox_id and cw_account_id and cw_token):
+        raise HTTPException(status_code=400, detail="demo_inbox_missing")
+
+    result = await chatwoot_client.simulate_incoming_message(
+        account_id=cw_account_id, user_token=cw_token, inbox_id=inbox_id,
+    )
+    if not result.get("ok"):
+        raise HTTPException(status_code=502, detail=result.get("error", "simulate_failed"))
+    return result
+
+
 # ============================
 # WhatsApp Meta Tech Provider — real integration (gated by env)
 # ============================

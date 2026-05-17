@@ -23,6 +23,7 @@ import {
   ExternalLink,
   X,
   Info,
+  Send,
 } from "lucide-react";
 
 const PROVIDER_META = {
@@ -131,6 +132,21 @@ export default function Channels() {
     }
   };
 
+  const simulateMessage = async () => {
+    setError("");
+    try {
+      const { data } = await api.post("/me/channels/whatsapp/demo/simulate");
+      setToast(
+        lang === "ar"
+          ? `📩 وصلت رسالة جديدة من ${data.contact_name} — افتح صندوق الرسائل لتراها!`
+          : `📩 New message from ${data.contact_name} — open the Inbox to reply!`
+      );
+      setTimeout(() => setToast(""), 6000);
+    } catch (e) {
+      setError(formatApiErrorDetail(e.response?.data?.detail) || e.message);
+    }
+  };
+
   return (
     <div className="space-y-6" data-testid="channels-page">
       <div>
@@ -167,7 +183,12 @@ export default function Channels() {
           lang={lang}
         />
       ) : (
-        <WhatsAppConnectedCard channel={whatsapp} onDisconnect={disconnectWhatsApp} lang={lang} />
+        <WhatsAppConnectedCard
+          channel={whatsapp}
+          onDisconnect={disconnectWhatsApp}
+          onSimulate={simulateMessage}
+          lang={lang}
+        />
       )}
 
       {/* Other channels - placeholders */}
@@ -331,7 +352,13 @@ const WhatsAppConnectCard = ({ onConnect, connecting, fbReady, mock, lang }) => 
 /* ------------------------------------------------------------------ */
 /* WhatsApp connected state                                            */
 /* ------------------------------------------------------------------ */
-const WhatsAppConnectedCard = ({ channel, onDisconnect, lang }) => {
+const WhatsAppConnectedCard = ({ channel, onDisconnect, onSimulate, lang }) => {
+  const [simulating, setSimulating] = useState(false);
+  const handleSimulate = async () => {
+    setSimulating(true);
+    try { await onSimulate(); } finally { setSimulating(false); }
+  };
+
   const connectedAt = channel.connected_at
     ? new Date(channel.connected_at).toLocaleDateString(lang === "ar" ? "ar-OM" : "en-OM", {
         year: "numeric",
@@ -427,6 +454,36 @@ const WhatsAppConnectedCard = ({ channel, onDisconnect, lang }) => {
                   : "This number is registered under SocialHub's account as Meta's Tech Provider. Messages route through SocialHub, and each promotional message is debited from your wallet (0.025 OMR/message).")}
           </p>
         </div>
+
+        {channel.is_demo && onSimulate && (
+          <div data-testid="demo-simulate-panel" className="mt-4 rounded-2xl border-2 border-dashed border-amber-300 bg-gradient-to-br from-amber-50 to-amber-100/40 p-5">
+            <div className="flex flex-col md:flex-row md:items-center gap-4 justify-between">
+              <div>
+                <div className="font-heading text-sm font-bold text-amber-900 mb-1 flex items-center gap-1.5">
+                  <Sparkles size={14} className="text-amber-600" />
+                  {lang === "ar" ? "محاكاة رسالة جديدة" : "Simulate a new message"}
+                </div>
+                <p className="text-xs text-amber-800/90">
+                  {lang === "ar"
+                    ? "اضغط الزر لتصلك رسالة تجريبية جديدة من عميل عشوائي. ستظهر في صندوق الرسائل خلال ثانية."
+                    : "Click the button to receive a fresh test message from a random customer. It'll appear in your inbox within a second."}
+                </p>
+              </div>
+              <Button
+                data-testid="simulate-message-btn"
+                onClick={handleSimulate}
+                disabled={simulating}
+                className="bg-amber-600 hover:bg-amber-700 text-white rounded-xl px-5 h-11 font-semibold whitespace-nowrap"
+              >
+                {simulating ? (
+                  <><Loader2 className="animate-spin me-2" size={15} />{lang === "ar" ? "جاري الإرسال..." : "Sending..."}</>
+                ) : (
+                  <><Send size={15} className="me-2" />{lang === "ar" ? "أرسل رسالة تجريبية" : "Send test message"}</>
+                )}
+              </Button>
+            </div>
+          </div>
+        )}
       </CardContent>
     </Card>
   );
