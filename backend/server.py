@@ -140,6 +140,7 @@ async def _provision_chatwoot_async(user_id: str) -> None:
             {"$set": {
                 "chatwoot_account_id": result["account_id"],
                 "chatwoot_user_id": result["user_id"],
+                "chatwoot_access_token": result.get("access_token"),
                 "chatwoot_provisioning_error": None,
                 "chatwoot_provisioned_at": datetime.now(timezone.utc).isoformat(),
             }},
@@ -721,6 +722,11 @@ async def connect_whatsapp(payload: WhatsAppConnectRequest, user: dict = Depends
 @api_router.delete("/me/channels/whatsapp")
 async def disconnect_whatsapp(user: dict = Depends(_current_user)):
     await db.channels.delete_one({"user_id": user["id"], "provider": "whatsapp"})
+    # Reset demo-seed flag so next connect re-seeds (only matters if user re-connects demo)
+    await db.users.update_one(
+        {"id": user["id"]},
+        {"$unset": {"chatwoot_demo_seeded": ""}},
+    )
     return {"ok": True}
 
 
@@ -798,6 +804,29 @@ async def whatsapp_connect(payload: WhatsAppEmbeddedSignupRequest, user: dict = 
             "connected_at": now,
             "updated_at": now,
         }
+
+        # Seed demo conversations into the user's Chatwoot workspace (best-effort, async)
+        cw_account_id = user.get("chatwoot_account_id")
+        cw_token = user.get("chatwoot_access_token")
+        if cw_account_id and cw_token and not user.get("chatwoot_demo_seeded"):
+            try:
+                seed = await chatwoot_client.seed_demo_conversations(
+                    account_id=cw_account_id,
+                    user_token=cw_token,
+                    lang="ar",
+                )
+                if seed.get("ok"):
+                    await db.users.update_one(
+                        {"id": user["id"]},
+                        {"$set": {
+                            "chatwoot_demo_seeded": True,
+                            "chatwoot_demo_inbox_id": seed.get("inbox_id"),
+                        }},
+                    )
+                    doc["demo_inbox_id"] = seed.get("inbox_id")
+                    logger.info("Demo conversations seeded for user %s", user["id"])
+            except Exception as e:
+                logger.warning("Demo seed failed (non-fatal) for user %s: %s", user["id"], e)
 
     await db.channels.update_one(
         {"user_id": user["id"], "provider": "whatsapp"},

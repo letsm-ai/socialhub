@@ -105,13 +105,14 @@ async def delete_account(account_id: int) -> None:
 async def provision_for_user(user_doc: dict) -> dict:
     """
     Idempotent: provisions a Chatwoot account + user for the given SocialHub user.
-    Returns {"account_id": int, "user_id": int}.
+    Returns {"account_id": int, "user_id": int, "access_token": str}.
     """
     company = user_doc.get("company_name") or user_doc.get("name") or "SocialHub Client"
     acc = await create_account(name=company)
     account_id = acc["id"]
     cw_user = await create_user(name=user_doc["name"], email=user_doc["email"])
     cw_user_id = cw_user["id"]
+    cw_access_token = cw_user.get("access_token") or ""
     try:
         await link_user_to_account(account_id, cw_user_id, role="administrator")
     except ChatwootError as e:
@@ -122,4 +123,178 @@ async def provision_for_user(user_doc: dict) -> dict:
         except Exception:
             pass
         raise
-    return {"account_id": account_id, "user_id": cw_user_id}
+    return {"account_id": account_id, "user_id": cw_user_id, "access_token": cw_access_token}
+
+
+# ===========================================================
+# Application API (uses per-user access_token)
+# Used to seed demo data into a client's Chatwoot workspace.
+# ===========================================================
+def _app_headers(user_access_token: str) -> dict:
+    return {"Content-Type": "application/json", "api_access_token": user_access_token}
+
+
+async def create_api_inbox(account_id: int, user_token: str, name: str, webhook_url: str = "") -> dict:
+    """POST /api/v1/accounts/{aid}/inboxes — creates an API channel inbox."""
+    payload = {
+        "name": name,
+        "channel": {"type": "api", "webhook_url": webhook_url or ""},
+    }
+    async with httpx.AsyncClient(timeout=20.0) as cx:
+        r = await cx.post(
+            f"{_base()}/api/v1/accounts/{account_id}/inboxes",
+            headers=_app_headers(user_token),
+            json=payload,
+        )
+        if r.status_code >= 400:
+            raise ChatwootError(f"create_api_inbox {r.status_code}: {r.text}")
+        return r.json()
+
+
+async def create_contact(account_id: int, user_token: str, inbox_id: int, name: str, phone: str) -> dict:
+    """POST /api/v1/accounts/{aid}/contacts — creates a contact (also assigns to inbox)."""
+    payload = {
+        "name": name,
+        "phone_number": phone,
+        "inbox_id": inbox_id,
+    }
+    async with httpx.AsyncClient(timeout=20.0) as cx:
+        r = await cx.post(
+            f"{_base()}/api/v1/accounts/{account_id}/contacts",
+            headers=_app_headers(user_token),
+            json=payload,
+        )
+        if r.status_code >= 400:
+            raise ChatwootError(f"create_contact {r.status_code}: {r.text}")
+        return r.json()
+
+
+async def create_conversation(account_id: int, user_token: str, inbox_id: int, contact_id: int,
+                              source_id: str, message: str) -> dict:
+    """POST /api/v1/accounts/{aid}/conversations — creates a conversation with the first incoming message."""
+    payload = {
+        "source_id": source_id,
+        "inbox_id": inbox_id,
+        "contact_id": contact_id,
+        "status": "open",
+        "message": {"content": message, "message_type": "incoming"},
+    }
+    async with httpx.AsyncClient(timeout=20.0) as cx:
+        r = await cx.post(
+            f"{_base()}/api/v1/accounts/{account_id}/conversations",
+            headers=_app_headers(user_token),
+            json=payload,
+        )
+        if r.status_code >= 400:
+            raise ChatwootError(f"create_conversation {r.status_code}: {r.text}")
+        return r.json()
+
+
+async def post_message(account_id: int, user_token: str, conversation_id: int,
+                       content: str, incoming: bool = True) -> dict:
+    """POST /api/v1/accounts/{aid}/conversations/{cid}/messages — append a message to existing conversation."""
+    payload = {
+        "content": content,
+        "message_type": "incoming" if incoming else "outgoing",
+    }
+    async with httpx.AsyncClient(timeout=20.0) as cx:
+        r = await cx.post(
+            f"{_base()}/api/v1/accounts/{account_id}/conversations/{conversation_id}/messages",
+            headers=_app_headers(user_token),
+            json=payload,
+        )
+        if r.status_code >= 400:
+            raise ChatwootError(f"post_message {r.status_code}: {r.text}")
+        return r.json()
+
+
+async def seed_demo_conversations(account_id: int, user_token: str, lang: str = "ar") -> dict:
+    """
+    Creates a demo inbox + 3 sample contacts + 3 conversations with realistic messages.
+    Returns a summary dict. Idempotent-ish: if the inbox name already exists, errors are
+    swallowed and a partial result is returned.
+    """
+    inbox_name = "WhatsApp Demo (+968 9999 8888)"
+    try:
+        inbox = await create_api_inbox(account_id, user_token, name=inbox_name)
+        inbox_id = inbox["id"]
+    except ChatwootError as e:
+        logger.warning("seed_demo_conversations: inbox creation failed: %s", e)
+        return {"ok": False, "error": str(e)}
+
+    scenarios_ar = [
+        {
+            "name": "فاطمة الكندي",
+            "phone": "+96891234567",
+            "first": "السلام عليكم، عندكم الفستان الأخضر المقاس M؟",
+            "agent_reply": "وعليكم السلام، نعم متوفر! تفضلي رابط المنتج: https://example.com/p/123",
+            "customer_reply": "ممتاز، كم سعر الشحن لمسقط؟",
+        },
+        {
+            "name": "سالم الحارثي",
+            "phone": "+96892345678",
+            "first": "كم سعر الشحن للسلطنة؟ وكم يستغرق التوصيل؟",
+            "agent_reply": "أهلاً سالم، الشحن لمسقط ٢ ريال وللولايات ٣ ريال. التوصيل ٢-٤ أيام عمل.",
+            "customer_reply": "تمام، شكراً.",
+        },
+        {
+            "name": "مريم البلوشية",
+            "phone": "+96893456789",
+            "first": "أنا اشتريت طلب رقم #4528 ولين الحين ما وصل، صار يومين",
+            "agent_reply": "أعتذر مريم، خليني أتابع مع الشحن وأرجعلك خلال ١٠ دقائق.",
+            "customer_reply": None,
+        },
+    ]
+    scenarios_en = [
+        {
+            "name": "Fatima Al Kindi",
+            "phone": "+96891234567",
+            "first": "Hi, do you have the green dress in size M?",
+            "agent_reply": "Hello! Yes, available. Here's the link: https://example.com/p/123",
+            "customer_reply": "Great, what's shipping to Muscat?",
+        },
+        {
+            "name": "Salim Al Harthi",
+            "phone": "+96892345678",
+            "first": "How much is shipping to Oman and how long does it take?",
+            "agent_reply": "Hi Salim, OMR 2 to Muscat, OMR 3 to wilayats. Delivery 2-4 business days.",
+            "customer_reply": "Perfect, thanks!",
+        },
+        {
+            "name": "Maryam Al Balushi",
+            "phone": "+96893456789",
+            "first": "I placed order #4528 two days ago but it hasn't arrived yet.",
+            "agent_reply": "Sorry Maryam, let me check with the courier and get back to you in 10 minutes.",
+            "customer_reply": None,
+        },
+    ]
+    scenarios = scenarios_ar if lang == "ar" else scenarios_en
+    summary = {"ok": True, "inbox_id": inbox_id, "conversations": []}
+    for idx, sc in enumerate(scenarios):
+        try:
+            contact = await create_contact(account_id, user_token, inbox_id, sc["name"], sc["phone"])
+            # The contact payload returns a contact_inboxes array; we need its source_id
+            contact_data = contact.get("payload", {}).get("contact", {})
+            contact_id = contact_data.get("id")
+            source_id = None
+            for ci in contact_data.get("contact_inboxes", []):
+                if ci.get("inbox", {}).get("id") == inbox_id:
+                    source_id = ci.get("source_id")
+                    break
+            if not contact_id:
+                continue
+            conv = await create_conversation(
+                account_id, user_token, inbox_id, contact_id,
+                source_id or f"demo-{idx}", sc["first"],
+            )
+            conv_id = conv.get("id")
+            if conv_id and sc.get("agent_reply"):
+                await post_message(account_id, user_token, conv_id, sc["agent_reply"], incoming=False)
+            if conv_id and sc.get("customer_reply"):
+                await post_message(account_id, user_token, conv_id, sc["customer_reply"], incoming=True)
+            summary["conversations"].append({"contact": sc["name"], "id": conv_id})
+        except Exception as e:
+            logger.warning("seed_demo scenario %s failed: %s", idx, e)
+            summary["conversations"].append({"contact": sc["name"], "error": str(e)})
+
+    return summary
