@@ -55,10 +55,10 @@ log "Favicons + brand assets replaced ✅"
 # --------------------------------------------------------------------------
 # 3. Patch the page title and meta in index.html
 # --------------------------------------------------------------------------
-log "Step 3: Patching browser tab title to 'SocialHub | سوشال هَب'..."
-docker exec "$RAILS_CONTAINER" bash -c '
+log "Step 3: Patching browser tab title to 'SocialHub'..."
+docker exec "$RAILS_CONTAINER" sh -c '
   if [ -f /app/public/index.html ]; then
-    sed -i "s|<title>[^<]*</title>|<title>SocialHub | سوشال هَب</title>|g" /app/public/index.html || true
+    sed -i "s|<title>[^<]*</title>|<title>SocialHub</title>|g" /app/public/index.html || true
   fi
 ' || true
 
@@ -94,7 +94,7 @@ CSS_EOF
 
 # Inject the CSS link into Chatwoot's index.html (idempotent — only adds once)
 docker cp "$CSS_FILE" "${RAILS_CONTAINER}:/app/public/custom-branding.css"
-docker exec "$RAILS_CONTAINER" bash -c '
+docker exec "$RAILS_CONTAINER" sh -c '
   if [ -f /app/public/index.html ] && ! grep -q "custom-branding.css" /app/public/index.html; then
     sed -i "s|</head>|<link rel=\"stylesheet\" href=\"/custom-branding.css\"></head>|" /app/public/index.html
   fi
@@ -127,7 +127,16 @@ log "Step 6: Restarting chatwoot-rails to apply env changes..."
 cd "$DEPLOY_DIR"
 docker compose up -d
 docker restart "$RAILS_CONTAINER" >/dev/null
-sleep 8
+log "Waiting for Chatwoot to be ready..."
+for i in $(seq 1 24); do
+  CODE=$(curl -sk -o /dev/null -w "%{http_code}" "https://letsm.io/favicon.ico" 2>/dev/null || echo "000")
+  if [ "$CODE" = "200" ] || [ "$CODE" = "304" ]; then
+    log "Chatwoot is back up (status: $CODE)"
+    break
+  fi
+  echo "  waiting... ($i/24 — $CODE)"
+  sleep 5
+done
 
 # --------------------------------------------------------------------------
 # 7. Final verification
@@ -159,5 +168,8 @@ To re-apply (e.g., after Chatwoot upgrade overwrites public/):
 
 Hard-refresh your browser (Cmd+Shift+R / Ctrl+Shift+R) to see changes.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+EOF
+�━━━━━━━━━━━
 
 EOF
