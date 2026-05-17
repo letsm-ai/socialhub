@@ -46,6 +46,12 @@ export default function Wallet() {
     setError("");
     try {
       const { data: r } = await api.post("/me/wallet/topup", { package_id: pkgId });
+      // If real gateway (Thawani), redirect to its checkout page
+      if (r.payment_url) {
+        window.location.href = r.payment_url;
+        return;
+      }
+      // Mock mode: instantly credited
       setData((d) => ({
         ...d,
         wallet: r.wallet,
@@ -60,6 +66,24 @@ export default function Wallet() {
       setTopping(null);
     }
   };
+
+  // After redirect back from Thawani, show success/cancel toast
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const status = params.get("topup");
+    if (status === "success") {
+      setToast(lang === "ar" ? "💚 شكراً! تم استلام الدفعة، الرصيد سيُحدّث خلال ثوانٍ." : "💚 Thanks! Payment received, balance will update shortly.");
+      setTimeout(() => setToast(""), 6000);
+      // Soft-refresh wallet to pick up webhook credit
+      setTimeout(load, 3000);
+      setTimeout(load, 8000);
+      window.history.replaceState({}, "", "/dashboard/wallet");
+    } else if (status === "cancelled") {
+      setError(lang === "ar" ? "تم إلغاء العملية. لم يُخصم أي مبلغ." : "Payment cancelled. No charge was made.");
+      window.history.replaceState({}, "", "/dashboard/wallet");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const balance = data?.wallet?.balance_omr ?? 0;
   const credits = data?.wallet?.promotional_credits ?? 0;

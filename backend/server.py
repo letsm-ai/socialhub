@@ -29,6 +29,7 @@ from auth import (
 )
 import chatwoot_client
 import whatsapp_meta
+import thawani  # noqa: F401  -- gated by env
 
 # MongoDB connection
 mongo_url = os.environ["MONGO_URL"]
@@ -196,7 +197,11 @@ TOPUP_PACKAGES = [
 
 @api_router.get("/wallet/packages")
 async def list_packages():
-    return {"packages": TOPUP_PACKAGES, "price_per_message_omr": MESSAGE_PRICE_OMR}
+    return {
+        "packages": TOPUP_PACKAGES,
+        "price_per_message_omr": MESSAGE_PRICE_OMR,
+        "payment_gateway": "thawani" if thawani.is_configured() else "mock",
+    }
 
 
 @api_router.get("/me/wallet")
@@ -221,17 +226,69 @@ class TopupRequest(BaseModel):
 
 
 @api_router.post("/me/wallet/topup")
-async def topup_wallet(payload: TopupRequest, user: dict = Depends(_current_user)):
+async def topup_wallet(payload: TopupRequest, request: Request, user: dict = Depends(_current_user)):
     """
-    MOCK Stripe checkout — instantly credits the wallet.
-    In production this would create a Stripe Checkout Session and only credit
-    after the `checkout.session.completed` webhook.
+    If Thawani is configured: creates a Thawani Checkout Session and returns
+    `payment_url` for the frontend to redirect to. Wallet is credited only after
+    the `payment.succeeded` webhook arrives.
+    Otherwise (mock mode): instantly credits the wallet.
     """
     pkg = next((p for p in TOPUP_PACKAGES if p["id"] == payload.package_id), None)
     if not pkg:
         raise HTTPException(status_code=400, detail="Unknown top-up package")
     now = datetime.now(timezone.utc).isoformat()
-    # Atomic balance + credits update
+
+    # ---------- Real payment via Thawani ----------
+    if thawani.is_configured():
+        txn_id = str(uuid.uuid4())
+        # Frontend origin (use request origin or fallback to default)
+        origin = request.headers.get("origin") or os.environ.get("FRONTEND_ORIGIN", "https://app.letsm.io")
+        try:
+            session = await thawani.create_checkout_session(
+                amount_omr=pkg["price_omr"],
+                products=[{
+                    "name": f"SocialHub {pkg['name_en']} - {pkg['messages']} messages",
+                    "quantity": 1,
+                    "unit_amount_omr": pkg["price_omr"],
+                }],
+                client_reference_id=txn_id,
+                success_url=f"{origin}/dashboard/wallet?topup=success",
+                cancel_url=f"{origin}/dashboard/wallet?topup=cancelled",
+                metadata={
+                    "user_id": user["id"],
+                    "package_id": pkg["id"],
+                    "txn_id": txn_id,
+                },
+            )
+        except Exception as e:
+            logger.exception("Thawani checkout creation failed for user %s", user["id"])
+            raise HTTPException(status_code=502, detail=f"payment_gateway_error: {e}")
+
+        # Record pending transaction
+        txn = {
+            "id": txn_id,
+            "user_id": user["id"],
+            "type": "TOPUP",
+            "package_id": pkg["id"],
+            "package_name": pkg["name_en"],
+            "messages": pkg["messages"],
+            "amount_omr": pkg["price_omr"],
+            "status": "PENDING",
+            "gateway": "thawani",
+            "gateway_session_id": session.get("session_id"),
+            "created_at": now,
+        }
+        await db.wallet_transactions.insert_one(dict(txn))
+        return {
+            "ok": True,
+            "stub": False,
+            "gateway": "thawani",
+            "payment_url": thawani.build_payment_url(session["session_id"]),
+            "session_id": session.get("session_id"),
+            "transaction": txn,
+        }
+
+    # ---------- MOCK Stripe checkout — instantly credits the wallet ----------
     await db.wallets.update_one(
         {"user_id": user["id"]},
         {
@@ -250,6 +307,7 @@ async def topup_wallet(payload: TopupRequest, user: dict = Depends(_current_user
         "messages": pkg["messages"],
         "amount_omr": pkg["price_omr"],
         "status": "PAID",  # MOCK
+        "gateway": "mock",
         "created_at": now,
     }
     await db.wallet_transactions.insert_one(dict(txn))
@@ -258,9 +316,102 @@ async def topup_wallet(payload: TopupRequest, user: dict = Depends(_current_user
     return {
         "ok": True,
         "stub": True,
+        "gateway": "mock",
         "wallet": wallet,
         "transaction": txn,
         "estimated_messages_remaining": int(balance / MESSAGE_PRICE_OMR),
+    }
+
+
+@api_router.post("/webhooks/thawani")
+async def thawani_webhook(request: Request):
+    """
+    Thawani sends payment lifecycle events here. Events of interest:
+      - checkout.completed → mark txn PAID and credit wallet
+      - payment.succeeded  → ditto (for direct payments via PaymentIntent flow)
+      - payment.failed     → mark txn FAILED
+    Signature: HMAC-SHA256 of `body + '-' + timestamp` with webhook secret.
+    """
+    raw = await request.body()
+    timestamp = request.headers.get("thawani-timestamp")
+    signature = request.headers.get("thawani-signature")
+
+    if thawani.is_configured() and thawani.get_config()["webhook_secret"]:
+        if not thawani.verify_signature(raw, timestamp, signature):
+            logger.warning("Thawani webhook signature mismatch")
+            raise HTTPException(status_code=403, detail="invalid_signature")
+
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+
+    event_type = payload.get("event_type") or ""
+    data = payload.get("data") or {}
+    client_ref = data.get("client_reference_id") or data.get("checkout_invoice")
+    session_id = data.get("session_id")
+    now = datetime.now(timezone.utc).isoformat()
+
+    # Persist raw event for audit
+    await db.wallet_events.insert_one({
+        "id": str(uuid.uuid4()),
+        "received_at": now,
+        "event_type": event_type,
+        "session_id": session_id,
+        "client_reference_id": client_ref,
+        "raw": payload,
+    })
+
+    if event_type in ("checkout.completed", "payment.succeeded"):
+        # Find the pending transaction
+        txn = None
+        if client_ref:
+            txn = await db.wallet_transactions.find_one({"id": client_ref}, {"_id": 0})
+        if not txn and session_id:
+            txn = await db.wallet_transactions.find_one({"gateway_session_id": session_id}, {"_id": 0})
+        if not txn:
+            logger.warning("Thawani webhook: no matching txn for ref=%s session=%s", client_ref, session_id)
+            return {"received": True, "matched": False}
+        if txn.get("status") == "PAID":
+            return {"received": True, "already_paid": True}
+
+        # Credit the wallet
+        await db.wallets.update_one(
+            {"user_id": txn["user_id"]},
+            {
+                "$inc": {
+                    "balance_omr": float(txn["amount_omr"]),
+                    "promotional_credits": int(txn["messages"]),
+                },
+                "$set": {"last_topup_at": now, "updated_at": now},
+            },
+            upsert=True,
+        )
+        await db.wallet_transactions.update_one(
+            {"id": txn["id"]},
+            {"$set": {"status": "PAID", "paid_at": now}},
+        )
+        logger.info("Wallet credited via Thawani: user=%s amount=%s", txn["user_id"], txn["amount_omr"])
+        return {"received": True, "matched": True, "credited": True}
+
+    if event_type == "payment.failed":
+        if client_ref:
+            await db.wallet_transactions.update_one(
+                {"id": client_ref},
+                {"$set": {"status": "FAILED", "failed_at": now, "failure_reason": data.get("reason")}},
+            )
+        return {"received": True, "matched": True, "credited": False}
+
+    return {"received": True}
+
+
+@api_router.get("/payments/config")
+async def payments_public_config():
+    """Frontend can detect which payment provider is active."""
+    return {
+        "active_gateway": "thawani" if thawani.is_configured() else "mock",
+        "thawani": thawani.public_config_for_frontend(),
+        "currency": "OMR",
     }
 
 

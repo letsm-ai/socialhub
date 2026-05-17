@@ -354,10 +354,30 @@ const WhatsAppConnectCard = ({ onConnect, connecting, fbReady, mock, lang }) => 
 /* ------------------------------------------------------------------ */
 const WhatsAppConnectedCard = ({ channel, onDisconnect, onSimulate, lang }) => {
   const [simulating, setSimulating] = useState(false);
+  const [autoMode, setAutoMode] = useState(false);
+  const [autoSecondsLeft, setAutoSecondsLeft] = useState(0);
+
   const handleSimulate = async () => {
     setSimulating(true);
     try { await onSimulate(); } finally { setSimulating(false); }
   };
+
+  // Auto-mode: send a new test message every 45s for up to 5 minutes
+  useEffect(() => {
+    if (!autoMode) return;
+    setAutoSecondsLeft(300); // 5 min
+    // Fire one immediately
+    onSimulate();
+    const tick = setInterval(() => {
+      setAutoSecondsLeft((s) => {
+        if (s <= 1) { setAutoMode(false); return 0; }
+        return s - 1;
+      });
+    }, 1000);
+    const burst = setInterval(() => { onSimulate(); }, 45000);
+    return () => { clearInterval(tick); clearInterval(burst); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoMode]);
 
   const connectedAt = channel.connected_at
     ? new Date(channel.connected_at).toLocaleDateString(lang === "ar" ? "ar-OM" : "en-OM", {
@@ -469,18 +489,32 @@ const WhatsAppConnectedCard = ({ channel, onDisconnect, onSimulate, lang }) => {
                     : "Click the button to receive a fresh test message from a random customer. It'll appear in your inbox within a second."}
                 </p>
               </div>
-              <Button
-                data-testid="simulate-message-btn"
-                onClick={handleSimulate}
-                disabled={simulating}
-                className="bg-amber-600 hover:bg-amber-700 text-white rounded-xl px-5 h-11 font-semibold whitespace-nowrap"
-              >
-                {simulating ? (
-                  <><Loader2 className="animate-spin me-2" size={15} />{lang === "ar" ? "جاري الإرسال..." : "Sending..."}</>
-                ) : (
-                  <><Send size={15} className="me-2" />{lang === "ar" ? "أرسل رسالة تجريبية" : "Send test message"}</>
-                )}
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button
+                  data-testid="auto-simulate-btn"
+                  onClick={() => setAutoMode((v) => !v)}
+                  variant="outline"
+                  className="border-amber-400 text-amber-900 hover:bg-amber-100 rounded-xl px-4 h-11 font-semibold whitespace-nowrap"
+                >
+                  {autoMode
+                    ? (lang === "ar"
+                        ? `إيقاف التلقائي (${Math.ceil(autoSecondsLeft / 60)}د)`
+                        : `Stop auto (${Math.ceil(autoSecondsLeft / 60)}m)`)
+                    : (lang === "ar" ? "تشغيل تلقائي ٥ دقائق" : "Auto-send 5 min")}
+                </Button>
+                <Button
+                  data-testid="simulate-message-btn"
+                  onClick={handleSimulate}
+                  disabled={simulating}
+                  className="bg-amber-600 hover:bg-amber-700 text-white rounded-xl px-5 h-11 font-semibold whitespace-nowrap"
+                >
+                  {simulating ? (
+                    <><Loader2 className="animate-spin me-2" size={15} />{lang === "ar" ? "جاري..." : "Sending..."}</>
+                  ) : (
+                    <><Send size={15} className="me-2" />{lang === "ar" ? "أرسل رسالة تجريبية" : "Send test message"}</>
+                  )}
+                </Button>
+              </div>
             </div>
           </div>
         )}
