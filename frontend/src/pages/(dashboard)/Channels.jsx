@@ -100,11 +100,13 @@ export default function Channels() {
       const { data } = await api.post("/whatsapp/connect", payload);
       setChannels((cs) => [...cs.filter((c) => c.provider !== "whatsapp"), data.channel]);
       setToast(
-        lang === "ar"
-          ? "🎉 تم ربط رقم واتساب بنجاح!"
-          : "🎉 WhatsApp number connected successfully!"
+        metaEnabled
+          ? (lang === "ar" ? "🎉 تم ربط رقم واتساب بنجاح!" : "🎉 WhatsApp number connected successfully!")
+          : (lang === "ar"
+              ? "🚀 وضع الديمو نشط! استكشف صندوق الرسائل والتقارير. عند الجاهزية، اطلب ترقية لرقم حقيقي."
+              : "🚀 Demo mode active! Explore inbox & reports. When ready, request an upgrade to a real number.")
       );
-      setTimeout(() => setToast(""), 5000);
+      setTimeout(() => setToast(""), 8000);
       // Refresh mock indicator
       setMockMode(!metaEnabled);
     } catch (e) {
@@ -223,20 +225,33 @@ const WhatsAppConnectCard = ({ onConnect, connecting, fbReady, mock, lang }) => 
         </div>
 
         <h2 className="font-heading text-3xl md:text-4xl font-bold mb-3 leading-tight">
-          {lang === "ar" ? "اربط واتساب في ٣ دقائق" : "Connect WhatsApp in 3 minutes"}
+          {mock
+            ? (lang === "ar" ? "جرّب واتساب برقم ديمو فوراً" : "Try WhatsApp with a Demo number — now")
+            : (lang === "ar" ? "اربط واتساب في ٣ دقائق" : "Connect WhatsApp in 3 minutes")}
         </h2>
         <p className="text-emerald-100/80 leading-relaxed mb-6 max-w-xl">
-          {lang === "ar"
-            ? "ربط رسمي عبر Meta Business — احصل على رقم واتساب موثّق بالعلامة الخضراء، حملات ترويجية، وردود تلقائية. كل ذلك بنقرة واحدة."
-            : "Official Meta Business onboarding — get a verified green-checkmark WhatsApp number, promotional campaigns, and auto-replies. All with one click."}
+          {mock
+            ? (lang === "ar"
+                ? "ربط فوري برقم تجريبي (+968 9999 8888) لتختبر التجربة كاملة — صندوق الرسائل، الردود التلقائية، الحملات الترويجية — دون انتظار اعتماد Meta. الحملات الترويجية الحقيقية تتطلب اعتماداً رسمياً من Meta."
+                : "Instant connect with a demo number (+968 9999 8888) to test the full experience — unified inbox, auto-replies, broadcast campaigns — without waiting for Meta approval. Real promotional campaigns require official Meta verification.")
+            : (lang === "ar"
+                ? "ربط رسمي عبر Meta Business — احصل على رقم واتساب موثّق بالعلامة الخضراء، حملات ترويجية، وردود تلقائية. كل ذلك بنقرة واحدة."
+                : "Official Meta Business onboarding — get a verified green-checkmark WhatsApp number, promotional campaigns, and auto-replies. All with one click.")}
         </p>
 
         <ul className="space-y-2.5 mb-7">
-          {[
-            lang === "ar" ? "رقم WhatsApp Business موثّق رسمياً" : "Officially verified WhatsApp Business number",
-            lang === "ar" ? "لا تحتاج لتطبيقات أو رموز QR" : "No app installs or QR codes required",
-            lang === "ar" ? "تظهر الرسائل فوراً في صندوقك الموحّد" : "Messages flow into your unified inbox immediately",
-          ].map((t, i) => (
+          {(mock
+            ? [
+                lang === "ar" ? "رقم ديمو: +968 9999 8888" : "Demo number: +968 9999 8888",
+                lang === "ar" ? "محادثات وهمية لاختبار التدفق الكامل" : "Sample conversations to test the full flow",
+                lang === "ar" ? "حوّل لرقم حقيقي بنقرة واحدة لاحقاً" : "Switch to a real number with one click later",
+              ]
+            : [
+                lang === "ar" ? "رقم WhatsApp Business موثّق رسمياً" : "Officially verified WhatsApp Business number",
+                lang === "ar" ? "لا تحتاج لتطبيقات أو رموز QR" : "No app installs or QR codes required",
+                lang === "ar" ? "تظهر الرسائل فوراً في صندوقك الموحّد" : "Messages flow into your unified inbox immediately",
+              ]
+          ).map((t, i) => (
             <li key={i} className="flex items-start gap-2 text-sm text-emerald-50">
               <div className="flex-shrink-0 w-5 h-5 rounded-full bg-emerald-700/40 flex items-center justify-center mt-0.5">
                 <Check size={12} className="text-amber-300" strokeWidth={3} />
@@ -261,7 +276,9 @@ const WhatsAppConnectCard = ({ onConnect, connecting, fbReady, mock, lang }) => 
           ) : (
             <>
               <MessageCircle size={18} className="me-2" />
-              {lang === "ar" ? "اربط واتساب الآن" : "Connect WhatsApp now"}
+              {mock
+                ? (lang === "ar" ? "ابدأ تجربة الديمو الآن" : "Start Demo experience")
+                : (lang === "ar" ? "اربط واتساب الآن" : "Connect WhatsApp now")}
             </>
           )}
         </Button>
@@ -270,8 +287,8 @@ const WhatsAppConnectCard = ({ onConnect, connecting, fbReady, mock, lang }) => 
           <p className="mt-4 inline-flex items-center gap-1.5 text-[11px] text-amber-200/80 bg-amber-500/10 border border-amber-400/30 rounded-full px-3 py-1">
             <Info size={11} />
             {lang === "ar"
-              ? "وضع تجريبي: ضع REACT_APP_FACEBOOK_APP_ID و REACT_APP_WA_CONFIG_ID لتفعيل التدفق الحقيقي."
-              : "Demo mode: set REACT_APP_FACEBOOK_APP_ID and REACT_APP_WA_CONFIG_ID to enable the real flow."}
+              ? "وضع تجريبي — الرقم الفعلي (+968 9999 8888) ينشط بعد اعتماد Meta Tech Provider"
+              : "Demo mode — your real number activates after Meta Tech Provider approval"}
           </p>
         )}
       </div>
@@ -332,15 +349,23 @@ const WhatsAppConnectedCard = ({ channel, onDisconnect, lang }) => {
               <MessageCircle size={22} className="text-white" />
             </div>
             <div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <CardTitle className="font-heading text-lg font-bold text-stone-900">WhatsApp Business</CardTitle>
                 <Badge className="bg-emerald-700 text-white hover:bg-emerald-700">
                   <Check size={11} className="me-1" strokeWidth={3} />
                   {lang === "ar" ? "متصل" : "Connected"}
                 </Badge>
+                {channel.is_demo && (
+                  <Badge className="bg-amber-100 text-amber-900 border border-amber-300 hover:bg-amber-100">
+                    <Sparkles size={11} className="me-1" />
+                    {lang === "ar" ? "وضع تجريبي" : "Demo"}
+                  </Badge>
+                )}
               </div>
               <CardDescription className="text-stone-500 mt-0.5">
-                {lang === "ar" ? "تم الربط في" : "Connected on"} {connectedAt}
+                {channel.is_demo
+                  ? (lang === "ar" ? "رقم تجريبي لاستكشاف التطبيق" : "Demo number for exploration")
+                  : (lang === "ar" ? "تم الربط في" : "Connected on") + " " + connectedAt}
               </CardDescription>
             </div>
           </div>
@@ -393,9 +418,13 @@ const WhatsAppConnectedCard = ({ channel, onDisconnect, lang }) => {
         <div className="mt-6 flex items-start gap-2 p-4 bg-emerald-50/60 border border-emerald-100 rounded-2xl text-xs text-emerald-900">
           <ShieldCheck size={14} className="text-emerald-700 mt-0.5 flex-shrink-0" />
           <p>
-            {lang === "ar"
-              ? "هذا الرقم مُسجّل تحت حساب «سوشال هَب» كـ Tech Provider لدى Meta. الرسائل ترسل عبر سوشال هَب، وسعر كل رسالة ترويجية يُخصم من محفظتك (٠.٠٢٥ ر.ع/رسالة)."
-              : "This number is registered under SocialHub's account as Meta's Tech Provider. Messages route through SocialHub, and each promotional message is debited from your wallet (0.025 OMR/message)."}
+            {channel.is_demo
+              ? (lang === "ar"
+                  ? "أنت في وضع التجربة التجريبية — استكشف صندوق الرسائل، الردود التلقائية، والتقارير بدون أي رسوم. عند جاهزيتك، اطلب الترقية لرقم WhatsApp Business حقيقي عبر زر «فصل القناة» ثم «اربط واتساب الآن»."
+                  : "You're in demo mode — explore the unified inbox, auto-replies, and reports with zero fees. When ready, request a real WhatsApp Business number via Disconnect → Connect WhatsApp.")
+              : (lang === "ar"
+                  ? "هذا الرقم مُسجّل تحت حساب «سوشال هَب» كـ Tech Provider لدى Meta. الرسائل ترسل عبر سوشال هَب، وسعر كل رسالة ترويجية يُخصم من محفظتك (٠.٠٢٥ ر.ع/رسالة)."
+                  : "This number is registered under SocialHub's account as Meta's Tech Provider. Messages route through SocialHub, and each promotional message is debited from your wallet (0.025 OMR/message).")}
           </p>
         </div>
       </CardContent>

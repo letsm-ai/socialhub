@@ -791,9 +791,10 @@ async def whatsapp_connect(payload: WhatsAppEmbeddedSignupRequest, user: dict = 
             "waba_id": payload.waba_id,
             "phone_number_id": payload.phone_number_id,
             "business_id": payload.business_id,
-            "phone_number": "+968 9123 4567",
-            "display_name": user.get("company_name") or "—",
-            "provisioned_via": "mock",
+            "phone_number": "+968 9999 8888",
+            "display_name": (user.get("company_name") or "Demo Store") + " (Demo)",
+            "is_demo": True,
+            "provisioned_via": "demo",
             "connected_at": now,
             "updated_at": now,
         }
