@@ -1171,13 +1171,24 @@ async def admin_setup_whatsapp_routing(payload: dict | None = None, user: dict =
     One-time setup: create the WhatsApp API inbox inside the admin's Chatwoot
     and register the route. Body is optional — if omitted, the route is bound
     to the current authenticated user.
+
+    If the owner has no Chatwoot account yet, we provision one first.
     """
     owner_user_id = (payload or {}).get("owner_user_id") or user.get("id")
     owner = await db.users.find_one({"id": owner_user_id}, {"_id": 0})
     if not owner:
         raise HTTPException(status_code=404, detail="owner_user_not_found")
+
+    # Auto-provision Chatwoot if missing (covers seeded admin who never went through registration)
     if not owner.get("chatwoot_account_id"):
-        raise HTTPException(status_code=400, detail="owner has no chatwoot account")
+        try:
+            await _provision_chatwoot_async(owner_user_id)
+            owner = await db.users.find_one({"id": owner_user_id}, {"_id": 0})
+        except Exception as e:
+            logger.exception("auto-provision failed for owner")
+            raise HTTPException(status_code=500, detail=f"chatwoot_provision_failed: {e}")
+        if not owner or not owner.get("chatwoot_account_id"):
+            raise HTTPException(status_code=500, detail="provisioning_did_not_complete")
 
     try:
         route = await whatsapp_routing.ensure_route(db, owner_user_doc=owner)
