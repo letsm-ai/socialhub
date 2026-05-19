@@ -29,6 +29,7 @@ from auth import (
 )
 import chatwoot_client
 import whatsapp_meta
+import whatsapp_routing
 import thawani  # noqa: F401  -- gated by env
 
 # MongoDB connection
@@ -1058,7 +1059,8 @@ async def whatsapp_webhook_verify(request: Request):
 
 @api_router.post("/webhooks/whatsapp")
 async def whatsapp_webhook_event(request: Request):
-    """POST events from Meta. Verifies signature then stores the raw event for now."""
+    """POST events from Meta. Verifies signature, then routes incoming text
+    messages into the appropriate Chatwoot inbox."""
     raw = await request.body()
     sig = request.headers.get("x-hub-signature-256")
 
@@ -1071,15 +1073,142 @@ async def whatsapp_webhook_event(request: Request):
     except Exception:
         payload = {}
 
-    # Persist the event for now; downstream routing to a tenant + Chatwoot can be added later
-    await db.whatsapp_events.insert_one({
+    # Persist raw event for audit/replay
+    event_doc = {
         "id": str(uuid.uuid4()),
         "received_at": datetime.now(timezone.utc).isoformat(),
         "object": payload.get("object"),
         "entry_count": len(payload.get("entry", []) or []),
         "raw": payload,
-    })
-    return {"received": True}
+        "routing": [],
+    }
+
+    # Route any incoming text messages to Chatwoot
+    try:
+        messages = whatsapp_routing.extract_incoming_messages(payload)
+        for m in messages:
+            pn_id = m["phone_number_id"]
+            route = await whatsapp_routing.find_route_for_pn(db, pn_id)
+            if not route:
+                logger.warning("no whatsapp_route for phone_number_id=%s — message dropped", pn_id)
+                event_doc["routing"].append({"wa_id": m["wa_id"], "status": "no_route"})
+                continue
+            try:
+                result = await whatsapp_routing.append_incoming_message(
+                    db,
+                    route=route,
+                    wa_id=m["wa_id"],
+                    name=m["name"],
+                    text=m["text"],
+                )
+                event_doc["routing"].append({"wa_id": m["wa_id"], "status": "ok", **result})
+            except Exception as e:
+                logger.exception("failed to route message into chatwoot: %s", e)
+                event_doc["routing"].append({"wa_id": m["wa_id"], "status": "error", "error": str(e)})
+    except Exception as e:
+        logger.exception("webhook routing failed: %s", e)
+
+    await db.whatsapp_events.insert_one(event_doc)
+    return {"received": True, "routed": len(event_doc["routing"])}
+
+
+@api_router.post("/webhooks/chatwoot")
+async def chatwoot_webhook(request: Request):
+    """
+    Outgoing pipeline: Chatwoot agent reply → Meta WhatsApp.
+
+    Chatwoot fires a webhook on every event in the API inbox we created.
+    We only act on `message_created` events with message_type=outgoing
+    that originate from a known WhatsApp conversation.
+    """
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+
+    event = payload.get("event") or payload.get("message_type")
+    if event != "message_created":
+        return {"ignored": True, "reason": "not_message_created", "event": event}
+
+    # In Chatwoot's webhook for message_created, fields are flat
+    if payload.get("message_type") != "outgoing":
+        return {"ignored": True, "reason": "not_outgoing"}
+    if payload.get("private"):
+        return {"ignored": True, "reason": "private_note"}
+
+    content = payload.get("content") or ""
+    if not content.strip():
+        return {"ignored": True, "reason": "empty_content"}
+
+    conversation = payload.get("conversation") or {}
+    conversation_id = conversation.get("id") or payload.get("conversation_id")
+    if not conversation_id:
+        return {"ignored": True, "reason": "no_conversation_id"}
+
+    contact_map = await db.whatsapp_contacts.find_one({"conversation_id": conversation_id}, {"_id": 0})
+    if not contact_map:
+        # Either it's not a WhatsApp conversation, or we haven't tracked it
+        return {"ignored": True, "reason": "no_whatsapp_contact_for_conversation"}
+
+    wa_id = contact_map["wa_id"]
+    pn_id = contact_map["phone_number_id"]
+
+    try:
+        send_result = await whatsapp_meta.send_text_message(pn_id, wa_id, content)
+        logger.info("WhatsApp outgoing sent: wa_id=%s convo=%s id=%s", wa_id, conversation_id, send_result)
+        return {"sent": True, "wa_id": wa_id, "result": send_result}
+    except Exception as e:
+        logger.exception("Failed to send outgoing WhatsApp message: %s", e)
+        raise HTTPException(status_code=502, detail=f"meta_send_failed: {e}")
+
+
+# ============================
+# Admin: WhatsApp setup
+# ============================
+@api_router.post("/admin/whatsapp/setup-routing")
+async def admin_setup_whatsapp_routing(payload: dict | None = None, user: dict = Depends(_current_admin)):
+    """
+    One-time setup: create the WhatsApp API inbox inside the admin's Chatwoot
+    and register the route. Body is optional — if omitted, the route is bound
+    to the current authenticated user.
+    """
+    owner_user_id = (payload or {}).get("owner_user_id") or user.get("id")
+    owner = await db.users.find_one({"id": owner_user_id}, {"_id": 0})
+    if not owner:
+        raise HTTPException(status_code=404, detail="owner_user_not_found")
+    if not owner.get("chatwoot_account_id"):
+        raise HTTPException(status_code=400, detail="owner has no chatwoot account")
+
+    try:
+        route = await whatsapp_routing.ensure_route(db, owner_user_doc=owner)
+    except Exception as e:
+        logger.exception("ensure_route failed")
+        raise HTTPException(status_code=500, detail=f"ensure_route_failed: {e}")
+
+    return {
+        "route": {
+            "phone_number_id": route["phone_number_id"],
+            "display_phone_number": route.get("display_phone_number"),
+            "chatwoot_account_id": route["chatwoot_account_id"],
+            "chatwoot_inbox_id": route["chatwoot_inbox_id"],
+            "inbox_identifier": route["inbox_identifier"],
+            "owner_user_id": route["user_id"],
+        }
+    }
+
+
+@api_router.get("/admin/whatsapp/route")
+async def admin_get_whatsapp_route(user: dict = Depends(_current_admin)):
+    """Returns the active WhatsApp route, if any."""
+    cfg = whatsapp_meta.get_config()
+    pn_id = cfg.get("phone_number_id")
+    if not pn_id:
+        return {"configured": False, "reason": "WHATSAPP_PHONE_NUMBER_ID not set"}
+    route = await whatsapp_routing.find_route_for_pn(db, pn_id)
+    if not route:
+        return {"configured": True, "routed": False, "phone_number_id": pn_id}
+    route.pop("chatwoot_user_token", None)  # never leak the token
+    return {"configured": True, "routed": True, "route": route}
 
 
 # ============================

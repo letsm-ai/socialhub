@@ -45,12 +45,16 @@ def get_config() -> Dict[str, str]:
         "redirect_uri": _env("META_OAUTH_REDIRECT_URI", "https://app.letsm.io/api/meta/oauth/callback"),
         "verify_token": _env("WHATSAPP_WEBHOOK_VERIFY_TOKEN"),
         "tech_provider_business_id": _env("META_TECH_PROVIDER_BUSINESS_ID"),
+        "phone_number_id": _env("WHATSAPP_PHONE_NUMBER_ID"),
+        "waba_id": _env("WHATSAPP_BUSINESS_ACCOUNT_ID"),
+        "display_phone_number": _env("WHATSAPP_DISPLAY_PHONE_NUMBER"),
     }
 
 
 def is_configured() -> bool:
     cfg = get_config()
-    return all(cfg[k] for k in ("app_id", "app_secret", "system_user_token", "config_id"))
+    # Allow operation if we have system token + phone (Embedded Signup config is optional for single-tenant)
+    return bool(cfg["app_id"] and cfg["app_secret"] and cfg["system_user_token"] and cfg["phone_number_id"])
 
 
 def public_config_for_frontend() -> Dict[str, str]:

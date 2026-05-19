@@ -113,6 +113,7 @@ docker logs -f chatwoot-rails
 ```
 
 ## Changelog
+- **2026-05-18/19**: WhatsApp ↔ Chatwoot routing live. New module `whatsapp_routing.py` parses Meta webhooks → finds/creates Chatwoot contact + conversation → posts incoming message. `POST /api/webhooks/chatwoot` handles agent outgoing replies → sends via Meta. Admin setup: `POST /api/admin/whatsapp/setup-routing` (one-time creates API inbox), `GET /api/admin/whatsapp/route` (status). New env vars in `whatsapp_meta.get_config()`: `phone_number_id`, `waba_id`, `display_phone_number`. Chatwoot moved to `inbox.letsm.io` with full SocialHub/letsmAI branding (SVG logo, DB-level installation_configs updated, Rails layout injected with brand-rewrite.js).
 - **2026-05-17 evening (later)**: Trial banner UI added to `Dashboard.jsx` (shows days remaining + welcome gift messages, only when `trial.active`). GitHub Actions auto-deploy workflow `.github/workflows/deploy.yml` created (SSH → git pull → pip install → restart systemd → yarn build → docker restart). `DEPLOY.md` documents the one-time secrets setup.
 - **2026-05-13/15**: Initial build (auth, landing, dashboards, Chatwoot, wallet, channels mock)
 - **2026-05-16 early**: Production deploy to app.letsm.io via Traefik (Coolify-coexistence). Removed Made-with-Emergent badge. Deleted broken GitHub Actions.
