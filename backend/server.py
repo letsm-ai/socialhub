@@ -9,7 +9,7 @@ import os
 import logging
 import uuid
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
 from fastapi import FastAPI, APIRouter, Depends, HTTPException, Request, Response
@@ -28,6 +28,7 @@ from auth import (
     seed_admin, ensure_indexes,
 )
 import chatwoot_client
+import email_service
 import whatsapp_meta
 import whatsapp_routing
 import thawani  # noqa: F401  -- gated by env
@@ -123,6 +124,16 @@ async def register(payload: RegisterRequest, response: Response):
     # Fire-and-forget Chatwoot provisioning (does not block registration)
     asyncio.create_task(_provision_chatwoot_async(user_doc["id"]))
 
+    # Fire-and-forget welcome email (does not block registration)
+    try:
+        asyncio.create_task(email_service.send_welcome(
+            to=email,
+            name=user_doc["name"],
+            lang="ar",
+        ))
+    except Exception as e:
+        logger.warning("failed to schedule welcome email: %s", e)
+
     access = create_access_token(user_doc["id"], email, role="CLIENT")
     refresh = create_refresh_token(user_doc["id"])
     set_auth_cookies(response, access, refresh)
@@ -183,6 +194,90 @@ async def logout(response: Response, _: dict = Depends(_current_user)):
 @api_router.get("/auth/me")
 async def me(user: dict = Depends(_current_user)):
     return user
+
+
+# ----- Password reset flow -----------------------------------------------
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+    lang: Optional[str] = "ar"
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+
+
+@api_router.post("/auth/forgot-password")
+async def forgot_password(payload: ForgotPasswordRequest, request: Request):
+    """Always returns OK (no user enumeration). Sends a reset email if the
+    address is registered. Token is opaque and stored hashed."""
+    email = payload.email.lower().strip()
+    user = await db.users.find_one({"email": email}, {"_id": 0, "id": 1, "name": 1, "email": 1})
+    if user:
+        import secrets as _secrets
+        from hashlib import sha256
+
+        raw_token = _secrets.token_urlsafe(32)
+        token_hash = sha256(raw_token.encode()).hexdigest()
+        expires_at = datetime.now(timezone.utc) + timedelta(minutes=30)
+
+        await db.password_resets.insert_one({
+            "id": str(uuid.uuid4()),
+            "user_id": user["id"],
+            "token_hash": token_hash,
+            "expires_at": expires_at.isoformat(),
+            "used": False,
+            "ip": _client_ip(request),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+
+        frontend = os.environ.get("FRONTEND_URL", "https://app.letsm.io").rstrip("/")
+        reset_url = f"{frontend}/auth/reset-password?token={raw_token}"
+        try:
+            await email_service.send_password_reset(
+                to=email,
+                name=user.get("name") or email.split("@")[0],
+                reset_url=reset_url,
+                lang=payload.lang or "ar",
+            )
+        except Exception as e:
+            logger.exception("failed to send password reset email: %s", e)
+
+    return {"ok": True, "message": "If the email is registered, a reset link has been sent."}
+
+
+@api_router.post("/auth/reset-password")
+async def reset_password(payload: ResetPasswordRequest):
+    """Consumes a reset token and sets a new password (single-use)."""
+    if len(payload.new_password) < 8:
+        raise HTTPException(status_code=422, detail="Password must be at least 8 characters")
+
+    from hashlib import sha256
+    token_hash = sha256(payload.token.encode()).hexdigest()
+
+    record = await db.password_resets.find_one({"token_hash": token_hash, "used": False}, {"_id": 0})
+    if not record:
+        raise HTTPException(status_code=400, detail="invalid_or_used_token")
+
+    expires_at = datetime.fromisoformat(record["expires_at"])
+    if expires_at < datetime.now(timezone.utc):
+        raise HTTPException(status_code=400, detail="expired_token")
+
+    user = await db.users.find_one({"id": record["user_id"]})
+    if not user:
+        raise HTTPException(status_code=400, detail="user_not_found")
+
+    await db.users.update_one(
+        {"id": user["id"]},
+        {"$set": {"password_hash": hash_password(payload.new_password)}},
+    )
+    await db.password_resets.update_one(
+        {"token_hash": token_hash},
+        {"$set": {"used": True, "used_at": datetime.now(timezone.utc).isoformat()}},
+    )
+
+    return {"ok": True, "email": user["email"]}
 
 
 # Promotional message pricing — Solution Partner economics (we pay Meta)

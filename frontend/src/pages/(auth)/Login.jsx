@@ -135,6 +135,16 @@ export default function Login() {
               </>
             )}
           </Button>
+
+          <p className="text-sm text-center -mt-2">
+            <Link
+              to="/auth/forgot-password"
+              data-testid="link-forgot-password"
+              className="text-stone-600 hover:text-emerald-800 hover:underline"
+            >
+              {lang === "ar" ? "نسيت كلمة المرور؟" : "Forgot password?"}
+            </Link>
+          </p>
         </form>
 
         <p className="text-sm text-stone-600 text-center mt-8">
