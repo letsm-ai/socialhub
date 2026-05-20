@@ -789,6 +789,25 @@ class AdminStatusRequest(BaseModel):
     is_active: bool
 
 
+class AdminRoleRequest(BaseModel):
+    role: str  # "CLIENT" | "ADMIN"
+
+
+@api_router.post("/admin/clients/{client_id}/role")
+async def admin_set_role(client_id: str, payload: AdminRoleRequest, admin: dict = Depends(_current_admin)):
+    role = (payload.role or "").upper().strip()
+    if role not in ("CLIENT", "ADMIN"):
+        raise HTTPException(status_code=422, detail="role must be CLIENT or ADMIN")
+    user = await db.users.find_one({"id": client_id})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    await db.users.update_one(
+        {"id": client_id},
+        {"$set": {"role": role, "updated_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    return {"ok": True, "user_id": client_id, "role": role, "email": user.get("email")}
+
+
 @api_router.post("/admin/clients/{client_id}/status")
 async def admin_set_status(client_id: str, payload: AdminStatusRequest, admin: dict = Depends(_current_admin)):
     user = await db.users.find_one({"id": client_id})
