@@ -1222,6 +1222,24 @@ async def admin_get_whatsapp_route(user: dict = Depends(_current_admin)):
     return {"configured": True, "routed": True, "route": route}
 
 
+@api_router.delete("/admin/whatsapp/route")
+async def admin_delete_whatsapp_route(user: dict = Depends(_current_admin)):
+    """Removes the current WhatsApp route (forces a fresh setup on next call).
+    Note: this does NOT delete the Chatwoot inbox; it only removes our route mapping.
+    """
+    cfg = whatsapp_meta.get_config()
+    pn_id = cfg.get("phone_number_id")
+    if not pn_id:
+        raise HTTPException(status_code=400, detail="WHATSAPP_PHONE_NUMBER_ID not set")
+    result = await db.whatsapp_routes.delete_one({"phone_number_id": pn_id})
+    # Also clear conversation cache so new conversations are created in the new account
+    cache_cleared = await db.whatsapp_contacts.delete_many({"phone_number_id": pn_id})
+    return {
+        "deleted": result.deleted_count,
+        "cache_cleared": cache_cleared.deleted_count,
+    }
+
+
 # ============================
 # Stripe webhook (placeholder)
 # ============================
