@@ -84,6 +84,18 @@ async def link_user_to_account(account_id: int, user_id: int, role: str = "admin
         return r.json()
 
 
+async def get_user(user_id: int) -> dict:
+    """GET /platform/api/v1/users/{user_id} -> { id, name, email, access_token, ... }
+    Useful to recover an access_token for a user we provisioned previously but
+    whose token we never stored (legacy records)."""
+    async with httpx.AsyncClient(timeout=20.0) as cx:
+        r = await cx.get(f"{_base()}/platform/api/v1/users/{user_id}",
+                         headers=_headers())
+        if r.status_code >= 400:
+            raise ChatwootError(f"get_user {r.status_code}: {r.text}")
+        return r.json()
+
+
 async def get_sso_url(user_id: int) -> str:
     """GET /platform/api/v1/users/{user_id}/login -> { url }"""
     async with httpx.AsyncClient(timeout=20.0) as cx:

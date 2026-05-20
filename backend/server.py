@@ -1190,6 +1190,24 @@ async def admin_setup_whatsapp_routing(payload: dict | None = None, user: dict =
         if not owner or not owner.get("chatwoot_account_id"):
             raise HTTPException(status_code=500, detail="provisioning_did_not_complete")
 
+    # Backfill: if user was provisioned in a legacy run without storing access_token,
+    # recover it from Chatwoot Platform API now.
+    if owner.get("chatwoot_account_id") and not owner.get("chatwoot_access_token"):
+        cw_user_id = owner.get("chatwoot_user_id")
+        if cw_user_id:
+            try:
+                cw_user = await chatwoot_client.get_user(cw_user_id)
+                token = cw_user.get("access_token")
+                if token:
+                    await db.users.update_one(
+                        {"id": owner_user_id},
+                        {"$set": {"chatwoot_access_token": token}},
+                    )
+                    owner["chatwoot_access_token"] = token
+                    logger.info("Backfilled chatwoot_access_token for user %s", owner_user_id)
+            except Exception as e:
+                logger.exception("Failed to backfill chatwoot_access_token: %s", e)
+
     try:
         route = await whatsapp_routing.ensure_route(db, owner_user_doc=owner)
     except Exception as e:
