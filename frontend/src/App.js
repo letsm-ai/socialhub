@@ -25,6 +25,7 @@ import AdminDashboard from "@/pages/(admin)/AdminDashboard";
 import AdminClients from "@/pages/(admin)/AdminClients";
 import AdminBilling from "@/pages/(admin)/AdminBilling";
 import AdminQuotas from "@/pages/(admin)/AdminQuotas";
+import AdminAI from "@/pages/(admin)/AdminAI";
 
 function App() {
   return (
@@ -72,6 +73,7 @@ function App() {
                 <Route path="/admin/clients" element={<AdminClients />} />
                 <Route path="/admin/billing" element={<AdminBilling />} />
                 <Route path="/admin/quotas" element={<AdminQuotas />} />
+                <Route path="/admin/ai" element={<AdminAI />} />
               </Route>
             </Routes>
           </BrowserRouter>

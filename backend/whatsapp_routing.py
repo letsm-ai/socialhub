@@ -155,21 +155,66 @@ async def find_or_create_contact_conversation(
 
 
 async def append_incoming_message(db, *, route: dict, wa_id: str, name: str, text: str) -> dict:
-    """Routes a WhatsApp incoming text message into Chatwoot."""
+    """Routes a WhatsApp incoming text message into Chatwoot, then asks the AI
+    agent to optionally reply (auto-reply / handoff)."""
+    import ai_agent
+    import whatsapp_meta
+
     found = await find_or_create_contact_conversation(
         db, route=route, wa_id=wa_id, name=name, first_text=text,
     )
-    if found["created_new"]:
-        return {"action": "created_conversation", **found}
+    action = "created_conversation"
+    if not found["created_new"]:
+        msg = await post_message(
+            account_id=route["chatwoot_account_id"],
+            user_token=route["chatwoot_user_token"],
+            conversation_id=found["conversation_id"],
+            content=text,
+            incoming=True,
+        )
+        action = "appended_message"
+        message_id = msg.get("id")
+    else:
+        message_id = None
 
-    msg = await post_message(
-        account_id=route["chatwoot_account_id"],
-        user_token=route["chatwoot_user_token"],
-        conversation_id=found["conversation_id"],
-        content=text,
-        incoming=True,
-    )
-    return {"action": "appended_message", "message_id": msg.get("id"), **found}
+    # ---- AI auto-reply path ---------------------------------------------
+    ai_result = {"action": "skipped"}
+    try:
+        ai_result = await ai_agent.handle_incoming(
+            db,
+            conversation_id=found["conversation_id"],
+            incoming_text=text,
+        )
+        reply_text = ai_result.get("reply")
+        if reply_text:
+            # 1) Send to the user via Meta
+            try:
+                await whatsapp_meta.send_text_message(
+                    route["phone_number_id"], wa_id, reply_text
+                )
+            except Exception as e:
+                logger.exception("AI: failed to send via Meta: %s", e)
+
+            # 2) Mirror as outgoing in Chatwoot so the human agent sees it
+            try:
+                await post_message(
+                    account_id=route["chatwoot_account_id"],
+                    user_token=route["chatwoot_user_token"],
+                    conversation_id=found["conversation_id"],
+                    content=reply_text,
+                    incoming=False,
+                )
+            except Exception as e:
+                logger.exception("AI: failed to mirror to Chatwoot: %s", e)
+    except Exception as e:
+        logger.exception("AI handler failed: %s", e)
+
+    return {
+        "action": action,
+        "message_id": message_id,
+        "ai": ai_result,
+        **found,
+    }
 
 
 def extract_incoming_messages(payload: dict) -> list[dict]:

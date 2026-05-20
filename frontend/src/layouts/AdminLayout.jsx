@@ -6,7 +6,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import {
   Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { BarChart3, Users, Wallet, Activity, LogOut, Globe, ShieldCheck } from "lucide-react";
+import { BarChart3, Users, Wallet, Activity, LogOut, Globe, ShieldCheck, Bot } from "lucide-react";
 
 /**
  * AdminLayout — dark mini sidebar variant.
@@ -22,6 +22,7 @@ export default function AdminLayout() {
     { to: "/admin/clients", label: lang === "ar" ? "العملاء" : "Clients", icon: Users, testId: "admin-side-clients" },
     { to: "/admin/billing", label: lang === "ar" ? "الفوترة" : "Billing", icon: Wallet, testId: "admin-side-billing" },
     { to: "/admin/quotas", label: lang === "ar" ? "حصص الرسائل" : "Quotas", icon: Activity, testId: "admin-side-quotas" },
+    { to: "/admin/ai", label: lang === "ar" ? "مساعد AI" : "AI Agent", icon: Bot, testId: "admin-side-ai" },
   ];
 
   const onLogout = async () => {
@@ -33,6 +34,7 @@ export default function AdminLayout() {
     if (loc.pathname.startsWith("/admin/clients")) return lang === "ar" ? "العملاء" : "Clients";
     if (loc.pathname.startsWith("/admin/billing")) return lang === "ar" ? "الفوترة والإيرادات" : "Billing & Revenue";
     if (loc.pathname.startsWith("/admin/quotas")) return lang === "ar" ? "حصص الرسائل" : "Quotas";
+    if (loc.pathname.startsWith("/admin/ai")) return lang === "ar" ? "مساعد AI" : "AI Agent";
     return lang === "ar" ? "نظرة عامة" : "Overview";
   })();
 

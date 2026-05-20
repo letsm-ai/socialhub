@@ -44,6 +44,8 @@ jobs:
             echo ">>> Installing/refreshing backend Python deps"
             ./backend/venv/bin/pip install -q --upgrade pip
             ./backend/venv/bin/pip install -q -r backend/requirements.txt
+            # emergentintegrations is hosted on a private index, install it separately
+            ./backend/venv/bin/pip install -q emergentintegrations --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/ || echo "emergentintegrations install failed (non-fatal)"
 
             echo ">>> Restarting backend (systemd)"
             systemctl restart socialhub-api

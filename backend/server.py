@@ -27,6 +27,7 @@ from auth import (
     new_user_doc, new_subscription_doc, new_wallet_doc,
     seed_admin, ensure_indexes,
 )
+import ai_agent
 import chatwoot_client
 import email_service
 import whatsapp_meta
@@ -1370,6 +1371,80 @@ async def admin_delete_whatsapp_route(user: dict = Depends(_current_admin)):
         "deleted": result.deleted_count,
         "cache_cleared": cache_cleared.deleted_count,
     }
+
+
+# ============================
+# AI Agent administration
+# ============================
+class AISettingsPatch(BaseModel):
+    enabled: Optional[bool] = None
+    persona_ar: Optional[str] = None
+    persona_en: Optional[str] = None
+    handoff_message_ar: Optional[str] = None
+    handoff_message_en: Optional[str] = None
+    fallback_message_ar: Optional[str] = None
+    fallback_message_en: Optional[str] = None
+    website_url: Optional[str] = None
+    model: Optional[str] = None
+
+
+class AIKnowledgePayload(BaseModel):
+    title: str
+    content: str
+    lang: str = "both"  # "ar" | "en" | "both"
+
+
+@api_router.get("/admin/ai/settings")
+async def admin_get_ai_settings(admin: dict = Depends(_current_admin)):
+    return await ai_agent.get_settings(db)
+
+
+@api_router.put("/admin/ai/settings")
+async def admin_update_ai_settings(patch: AISettingsPatch, admin: dict = Depends(_current_admin)):
+    data = {k: v for k, v in patch.model_dump().items() if v is not None}
+    return await ai_agent.update_settings(db, data)
+
+
+@api_router.get("/admin/ai/knowledge")
+async def admin_list_knowledge(lang: Optional[str] = None, admin: dict = Depends(_current_admin)):
+    return {"items": await ai_agent.list_knowledge(db, lang=lang)}
+
+
+@api_router.post("/admin/ai/knowledge")
+async def admin_add_knowledge(payload: AIKnowledgePayload, admin: dict = Depends(_current_admin)):
+    if payload.lang not in ("ar", "en", "both"):
+        raise HTTPException(status_code=422, detail="lang must be ar, en, or both")
+    doc = {
+        "id": str(uuid.uuid4()),
+        "title": payload.title.strip(),
+        "content": payload.content.strip(),
+        "lang": payload.lang,
+        "scope": "global",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.ai_knowledge.insert_one(doc.copy())
+    doc.pop("_id", None)
+    return doc
+
+
+@api_router.delete("/admin/ai/knowledge/{kid}")
+async def admin_delete_knowledge(kid: str, admin: dict = Depends(_current_admin)):
+    result = await db.ai_knowledge.delete_one({"id": kid})
+    return {"deleted": result.deleted_count}
+
+
+@api_router.post("/admin/ai/conversation/{conversation_id}/takeover")
+async def admin_takeover(conversation_id: int, admin: dict = Depends(_current_admin)):
+    """Agent reclaims a conversation from the bot (stops AI replies)."""
+    await ai_agent.set_handoff(db, conversation_id, True)
+    return {"ok": True, "conversation_id": conversation_id, "handoff": True}
+
+
+@api_router.post("/admin/ai/conversation/{conversation_id}/release")
+async def admin_release(conversation_id: int, admin: dict = Depends(_current_admin)):
+    """Re-enables the bot for a previously handoff conversation."""
+    await ai_agent.set_handoff(db, conversation_id, False)
+    return {"ok": True, "conversation_id": conversation_id, "handoff": False}
 
 
 # ============================
