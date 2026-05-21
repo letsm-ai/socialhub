@@ -223,6 +223,12 @@ async def append_incoming_message(db, *, route: dict, wa_id: str, name: str, tex
             ai_result.get("handoff"), bool(ai_result.get("reply")),
         )
         reply_text = ai_result.get("reply")
+        if not reply_text:
+            logger.warning(
+                "[AI] No reply text generated. action=%s — check ai_settings.enabled, "
+                "EMERGENT_LLM_KEY, and emergentintegrations install.",
+                ai_result.get("action"),
+            )
         if reply_text:
             logger.info("[AI] Reply preview: %r", reply_text[:160])
             # 1) Send to the user via Meta
@@ -249,12 +255,33 @@ async def append_incoming_message(db, *, route: dict, wa_id: str, name: str, tex
                 logger.info("[AI] Mirrored reply into Chatwoot as private note")
             except Exception as e:
                 logger.exception("[AI] failed to mirror to Chatwoot: %s", e)
-        else:
-            logger.warning(
-                "[AI] No reply text generated. action=%s — check ai_settings.enabled, "
-                "EMERGENT_LLM_KEY, and emergentintegrations install.",
-                ai_result.get("action"),
-            )
+
+        # 3) Auto-handoff: send extra handoff message to user (if any) and
+        #    drop a 🚨 private note alerting the team.
+        extra_reply = ai_result.get("extra_reply")
+        if extra_reply:
+            try:
+                await whatsapp_meta.send_text_message(
+                    route["phone_number_id"], wa_id, extra_reply
+                )
+                logger.info("[AI] Sent extra handoff message via Meta")
+            except Exception as e:
+                logger.exception("[AI] failed to send handoff extra reply: %s", e)
+
+        team_note = ai_result.get("team_note")
+        if team_note:
+            try:
+                await post_message(
+                    account_id=route["chatwoot_account_id"],
+                    user_token=route["chatwoot_user_token"],
+                    conversation_id=found["conversation_id"],
+                    content=team_note,
+                    incoming=False,
+                    private=True,
+                )
+                logger.info("[AI] Posted team handoff alert as private note")
+            except Exception as e:
+                logger.exception("[AI] failed to post team note: %s", e)
     except Exception as e:
         logger.exception("[AI] handler failed: %s", e)
         ai_result = {"action": "error", "error": str(e)}

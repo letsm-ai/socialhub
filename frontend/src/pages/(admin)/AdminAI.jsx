@@ -8,7 +8,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { useLang } from "@/contexts/LanguageContext";
 import { api } from "@/contexts/AuthContext";
-import { Bot, Plus, Trash2, Loader2, BookOpen, Sparkles, AlertCircle, Save, Stethoscope, Send, CheckCircle2, XCircle, Key, Zap, Eye, EyeOff } from "lucide-react";
+import { Bot, Plus, Trash2, Loader2, BookOpen, Sparkles, AlertCircle, Save, Stethoscope, Send, CheckCircle2, XCircle, Key, Zap, Eye, EyeOff, UserCheck } from "lucide-react";
 
 export default function AdminAI() {
   const { lang } = useLang();
@@ -416,6 +416,97 @@ export default function AdminAI() {
               {saving ? <Loader2 className="animate-spin me-2" size={16} /> : <Save className="me-2" size={16} />}
               {t("حفظ الإعدادات", "Save settings")}
             </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Auto-Handoff */}
+      <Card data-testid="auto-handoff-card">
+        <CardHeader>
+          <CardTitle className="text-lg flex items-center gap-2">
+            <UserCheck size={18} className="text-emerald-700" />
+            {t("التحويل التلقائي للموظف", "Auto-handoff")}
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-5">
+          <div className="flex items-start justify-between gap-4 rounded-2xl border border-stone-200 bg-stone-50/50 p-4">
+            <div className="flex-1">
+              <div className="font-semibold text-stone-900 text-sm">
+                {t("تفعيل التحويل التلقائي", "Enable auto-handoff")}
+              </div>
+              <p className="text-xs text-stone-600 mt-1 leading-relaxed">
+                {t(
+                  "يحوّل المحادثة لموظف بشري تلقائياً (ويوقف البوت لها) عند: عجز البوت عن الإجابة عدة مرات متتالية، أو تكرار العميل نفس السؤال، أو طلب التحدّث مع موظف. يصل تنبيه 🚨 للفريق داخل Chatwoot.",
+                  "Auto-routes to a human (and silences the bot) when: the bot can't answer N times in a row, the customer repeats the same question, or asks for a human. The team gets a 🚨 alert inside Chatwoot."
+                )}
+              </p>
+            </div>
+            <Switch
+              data-testid="auto-handoff-toggle"
+              checked={!!settings.auto_handoff_enabled}
+              onCheckedChange={(v) => setSettings({ ...settings, auto_handoff_enabled: v })}
+            />
+          </div>
+
+          <div className={`grid sm:grid-cols-3 gap-4 ${settings.auto_handoff_enabled ? "" : "opacity-50 pointer-events-none"}`}>
+            <div>
+              <Label className="text-stone-700 mb-2 block text-sm">
+                {t("ردود fallback متتالية قبل التحويل", "Consecutive fallbacks before handoff")}
+              </Label>
+              <Input
+                data-testid="auto-handoff-fallback-threshold"
+                type="number"
+                min={1}
+                max={10}
+                value={settings.auto_handoff_fallback_threshold ?? 2}
+                onChange={(e) => setSettings({
+                  ...settings,
+                  auto_handoff_fallback_threshold: parseInt(e.target.value || "2", 10),
+                })}
+              />
+              <p className="text-[11px] text-stone-500 mt-1">
+                {t("مثال: 2 = يحوّل بعد ردّين \"لا أعرف\"", "e.g. 2 = handoff after two \"I don't know\" replies")}
+              </p>
+            </div>
+            <div>
+              <Label className="text-stone-700 mb-2 block text-sm">
+                {t("تكرار نفس السؤال قبل التحويل", "Repeat threshold")}
+              </Label>
+              <Input
+                data-testid="auto-handoff-repeat-threshold"
+                type="number"
+                min={2}
+                max={10}
+                value={settings.auto_handoff_repeat_threshold ?? 3}
+                onChange={(e) => setSettings({
+                  ...settings,
+                  auto_handoff_repeat_threshold: parseInt(e.target.value || "3", 10),
+                })}
+              />
+              <p className="text-[11px] text-stone-500 mt-1">
+                {t("مثال: 3 = يحوّل عند تكرار نفس الرسالة 3 مرات", "e.g. 3 = handoff when same message repeats 3×")}
+              </p>
+            </div>
+            <div>
+              <Label className="text-stone-700 mb-2 block text-sm">
+                {t("نافذة التكرار (ثوانٍ)", "Repeat window (seconds)")}
+              </Label>
+              <Input
+                data-testid="auto-handoff-repeat-window"
+                type="number"
+                min={30}
+                max={3600}
+                step={30}
+                value={settings.auto_handoff_repeat_window_seconds ?? 120}
+                onChange={(e) => setSettings({
+                  ...settings,
+                  auto_handoff_repeat_window_seconds: parseInt(e.target.value || "120", 10),
+                })}
+              />
+              <p className="text-[11px] text-stone-500 mt-1">
+                {t("المدة التي تُحتسب فيها التكرارات", "Window in which repeats are counted")}
+              </p>
+            </div>
           </div>
         </CardContent>
       </Card>

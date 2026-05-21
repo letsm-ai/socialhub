@@ -108,10 +108,30 @@ async def get_settings(db) -> dict:
             "model": "gpt-4o",
             "llm_provider": "emergent",   # "emergent" | "openai"
             "openai_api_key": "",          # used only when llm_provider == "openai"
+            # Auto-handoff configuration
+            "auto_handoff_enabled": True,
+            "auto_handoff_fallback_threshold": 2,    # N consecutive fallback replies
+            "auto_handoff_repeat_threshold": 3,      # N near-identical msgs from user
+            "auto_handoff_repeat_window_seconds": 120,
         }
     # Ensure newer fields exist for older rows
     s.setdefault("llm_provider", "emergent")
     s.setdefault("openai_api_key", "")
+    s.setdefault("auto_handoff_enabled", True)
+    s.setdefault("auto_handoff_fallback_threshold", 2)
+    s.setdefault("auto_handoff_repeat_threshold", 3)
+    s.setdefault("auto_handoff_repeat_window_seconds", 120)
+    # Backfill fallback messages — required by _is_fallback_reply to detect
+    # the bot's "I don't know" replies for auto-handoff. Older settings docs
+    # may have these set to None / missing.
+    if not (s.get("fallback_message_ar") or "").strip():
+        s["fallback_message_ar"] = "اعذرني، لست متأكداً من إجابة دقيقة لهذا السؤال. سأطلب من أحد أعضاء الفريق التواصل معك قريباً."
+    if not (s.get("fallback_message_en") or "").strip():
+        s["fallback_message_en"] = "I'm not sure about that one. Let me have a team member follow up with you shortly."
+    if not (s.get("handoff_message_ar") or "").strip():
+        s["handoff_message_ar"] = "تم تحويلك لأحد أعضاء الفريق، سيتواصلون معك خلال لحظات. شكراً لصبرك! 🙏"
+    if not (s.get("handoff_message_en") or "").strip():
+        s["handoff_message_en"] = "Got it — connecting you to our team. Someone will be with you shortly. Thanks for your patience! 🙏"
     return s
 
 
@@ -349,6 +369,105 @@ async def _generate_with_openai(
     return (resp.choices[0].message.content or "").strip()
 
 
+_FALLBACK_FINGERPRINT_LEN = 40  # chars used to detect fallback reuse
+
+
+def _is_fallback_reply(settings: dict, reply: str, lang: str) -> bool:
+    """Returns True if the bot's reply is (mostly) the configured fallback line.
+    Robust to LLM paraphrasing: we check both ends of the fallback because the
+    model commonly shortens the opening but keeps the distinctive ending
+    ("team will follow up" / "الفريق التواصل معك")."""
+    if not reply:
+        return False
+    fb = (settings.get(f"fallback_message_{lang}") or "").strip()
+    if not fb:
+        return False
+    reply_lower = reply.lower()
+    fb_lower = fb.lower()
+    # Distinctive tail (last ~25 chars, stripped of trailing punctuation)
+    tail = fb_lower.rstrip(".!؟…").strip()
+    tail = tail[-25:]
+    # Distinctive head (first ~20 chars, after the comma/apology)
+    head = fb_lower[:20]
+    if tail and tail in reply_lower:
+        return True
+    if head and head in reply_lower:
+        return True
+    # Strong-signal phrases that the LLM tends to keep when it can't answer
+    signal_phrases = [
+        "الفريق التواصل",
+        "أعضاء الفريق",
+        "اعضاء الفريق",
+        "team member",
+        "follow up",
+        "i'm not sure",
+        "لست متأكد",
+    ]
+    return any(p in reply_lower for p in signal_phrases)
+
+
+def _normalize_for_repeat(text: str) -> str:
+    """Lower + strip + collapse whitespace + drop punctuation for fuzzy repeat compare."""
+    t = (text or "").lower().strip()
+    t = re.sub(r"[\s\W_]+", " ", t, flags=re.UNICODE)
+    return t.strip()
+
+
+async def _evaluate_auto_handoff(
+    db, *, settings: dict, conversation_id: int, incoming_text: str,
+    bot_reply: Optional[str], lang: str,
+) -> tuple[bool, Optional[str]]:
+    """Decides whether to auto-handoff this conversation AFTER the bot has
+    generated a reply. Returns (should_handoff, reason_for_log).
+
+    Updates the running counters on `ai_conversations` regardless of decision.
+    """
+    if not settings.get("auto_handoff_enabled", True):
+        return False, None
+
+    fb_threshold = int(settings.get("auto_handoff_fallback_threshold", 2) or 2)
+    rep_threshold = int(settings.get("auto_handoff_repeat_threshold", 3) or 3)
+    rep_window = int(settings.get("auto_handoff_repeat_window_seconds", 120) or 120)
+    now = datetime.now(timezone.utc)
+    cutoff = now.timestamp() - rep_window
+
+    convo = await db.ai_conversations.find_one(
+        {"conversation_id": conversation_id}, {"_id": 0}
+    ) or {}
+
+    # ---- 1) Consecutive fallback replies ----
+    consecutive = int(convo.get("consecutive_fallbacks") or 0)
+    is_fb = _is_fallback_reply(settings, bot_reply or "", lang)
+    consecutive = consecutive + 1 if is_fb else 0
+
+    # ---- 2) Repeated user messages within window ----
+    norm = _normalize_for_repeat(incoming_text)
+    recent = [m for m in (convo.get("recent_user_msgs") or []) if m.get("ts", 0) >= cutoff]
+    recent.append({"norm": norm, "ts": now.timestamp()})
+    # cap list size
+    recent = recent[-10:]
+    repeats = sum(1 for m in recent if m.get("norm") == norm and norm)
+
+    # ---- Persist counters ----
+    await db.ai_conversations.update_one(
+        {"conversation_id": conversation_id},
+        {"$set": {
+            "conversation_id": conversation_id,
+            "consecutive_fallbacks": consecutive,
+            "recent_user_msgs": recent,
+            "updated_at": now.isoformat(),
+        }},
+        upsert=True,
+    )
+
+    # ---- Decide ----
+    if consecutive >= fb_threshold:
+        return True, f"fallback_threshold_reached ({consecutive}/{fb_threshold})"
+    if repeats >= rep_threshold:
+        return True, f"repeat_threshold_reached ({repeats}/{rep_threshold})"
+    return False, None
+
+
 async def handle_incoming(
     db,
     *,
@@ -360,7 +479,9 @@ async def handle_incoming(
       - If handoff already → do nothing.
       - If handoff intent detected → mark handoff and return handoff_message to send.
       - Otherwise → generate AI reply.
-    Returns: {action, reply, lang, handoff}
+      - After replying, evaluate auto-handoff triggers (repeat / fallback streak)
+        and, if tripped, mark conversation handoff and append a system signal.
+    Returns: {action, reply, lang, handoff, [handoff_reason], [team_note]}
     """
     settings = await get_settings(db)
     lang = detect_lang(incoming_text)
@@ -374,12 +495,41 @@ async def handle_incoming(
     if detect_handoff_keyword(incoming_text):
         await set_handoff(db, conversation_id, True)
         msg = settings.get(f"handoff_message_{lang}") or ""
-        return {"action": "handoff_triggered", "reply": msg, "lang": lang, "handoff": True}
+        team_note = (
+            "🚨 تحويل تلقائي: العميل طلب التحدث مع موظف."
+            if lang == "ar"
+            else "🚨 Auto-handoff: customer asked to speak to a human."
+        )
+        return {
+            "action": "handoff_triggered",
+            "reply": msg,
+            "lang": lang,
+            "handoff": True,
+            "handoff_reason": "keyword",
+            "team_note": team_note,
+        }
 
     reply, detected_lang = await generate_reply(
         db, text=incoming_text, conversation_id=conversation_id
     )
     if not reply:
+        # Still evaluate handoff so we don't get stuck on a silent bot
+        should_handoff, reason = await _evaluate_auto_handoff(
+            db, settings=settings, conversation_id=conversation_id,
+            incoming_text=incoming_text, bot_reply=None, lang=detected_lang,
+        )
+        if should_handoff:
+            await set_handoff(db, conversation_id, True)
+            msg = settings.get(f"handoff_message_{detected_lang}") or ""
+            team_note = _build_team_note(reason, detected_lang)
+            return {
+                "action": "auto_handoff",
+                "reply": msg,
+                "lang": detected_lang,
+                "handoff": True,
+                "handoff_reason": reason,
+                "team_note": team_note,
+            }
         return {"action": "no_reply", "reply": None, "lang": detected_lang, "handoff": False}
 
     # Track activity
@@ -392,4 +542,47 @@ async def handle_incoming(
         }, "$inc": {"message_count": 1}},
         upsert=True,
     )
+
+    # Evaluate auto-handoff AFTER the reply
+    should_handoff, reason = await _evaluate_auto_handoff(
+        db, settings=settings, conversation_id=conversation_id,
+        incoming_text=incoming_text, bot_reply=reply, lang=detected_lang,
+    )
+    if should_handoff:
+        await set_handoff(db, conversation_id, True)
+        handoff_msg = settings.get(f"handoff_message_{detected_lang}") or ""
+        team_note = _build_team_note(reason, detected_lang)
+        # We still send the AI reply; the team note alerts the agent.
+        return {
+            "action": "auto_handoff_after_reply",
+            "reply": reply,
+            "extra_reply": handoff_msg,
+            "lang": detected_lang,
+            "handoff": True,
+            "handoff_reason": reason,
+            "team_note": team_note,
+        }
+
     return {"action": "auto_reply", "reply": reply, "lang": detected_lang, "handoff": False}
+
+
+def _build_team_note(reason: Optional[str], lang: str) -> str:
+    if not reason:
+        return ""
+    if reason.startswith("fallback_threshold"):
+        return (
+            f"🚨 تحويل تلقائي: البوت لم يستطع الإجابة عدة مرات متتالية ({reason}). يرجى تولّي المحادثة."
+            if lang == "ar"
+            else f"🚨 Auto-handoff: bot couldn't answer ({reason}). Please take over."
+        )
+    if reason.startswith("repeat_threshold"):
+        return (
+            f"🚨 تحويل تلقائي: العميل يكرّر نفس السؤال ({reason}). يرجى تولّي المحادثة."
+            if lang == "ar"
+            else f"🚨 Auto-handoff: customer is repeating the same question ({reason}). Please take over."
+        )
+    return (
+        f"🚨 تحويل تلقائي: {reason}"
+        if lang == "ar"
+        else f"🚨 Auto-handoff: {reason}"
+    )

@@ -1389,6 +1389,10 @@ class AISettingsPatch(BaseModel):
     model: Optional[str] = None
     llm_provider: Optional[str] = None  # "emergent" | "openai"
     openai_api_key: Optional[str] = None  # empty → keep existing
+    auto_handoff_enabled: Optional[bool] = None
+    auto_handoff_fallback_threshold: Optional[int] = None
+    auto_handoff_repeat_threshold: Optional[int] = None
+    auto_handoff_repeat_window_seconds: Optional[int] = None
 
 
 class AIKnowledgePayload(BaseModel):
