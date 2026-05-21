@@ -203,11 +203,18 @@ async def create_conversation(account_id: int, user_token: str, inbox_id: int, c
 
 
 async def post_message(account_id: int, user_token: str, conversation_id: int,
-                       content: str, incoming: bool = True) -> dict:
-    """POST /api/v1/accounts/{aid}/conversations/{cid}/messages — append a message to existing conversation."""
+                       content: str, incoming: bool = True, private: bool = False) -> dict:
+    """POST /api/v1/accounts/{aid}/conversations/{cid}/messages — append a message to existing conversation.
+
+    When private=True, the message is recorded as an internal note (visible only
+    to agents) and Chatwoot will fire its webhook with private=true, which our
+    outgoing handler ignores. Use this for AI/bot replies so they don't loop
+    back through the Chatwoot → WhatsApp pipeline.
+    """
     payload = {
         "content": content,
         "message_type": "incoming" if incoming else "outgoing",
+        "private": bool(private),
     }
     async with httpx.AsyncClient(timeout=20.0) as cx:
         r = await cx.post(

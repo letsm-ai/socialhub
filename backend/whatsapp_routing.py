@@ -154,11 +154,39 @@ async def find_or_create_contact_conversation(
     return {"contact_id": contact_id, "conversation_id": conversation_id, "created_new": True}
 
 
-async def append_incoming_message(db, *, route: dict, wa_id: str, name: str, text: str) -> dict:
+async def append_incoming_message(db, *, route: dict, wa_id: str, name: str, text: str,
+                                  meta_message_id: Optional[str] = None) -> dict:
     """Routes a WhatsApp incoming text message into Chatwoot, then asks the AI
-    agent to optionally reply (auto-reply / handoff)."""
+    agent to optionally reply (auto-reply / handoff).
+
+    `meta_message_id` is the `wamid.XXXX` from Meta. When provided, we dedupe
+    so Meta webhook retries don't cause double AI replies.
+    """
     import ai_agent
     import whatsapp_meta
+
+    # Idempotency: short-circuit if we've already processed this exact wamid
+    if meta_message_id:
+        existing = await db.whatsapp_processed_messages.find_one(
+            {"meta_message_id": meta_message_id}, {"_id": 0}
+        )
+        if existing:
+            logger.info(
+                "[AI] Duplicate webhook for wamid=%s — skipping (already processed)",
+                meta_message_id,
+            )
+            return {"action": "duplicate_skipped", "meta_message_id": meta_message_id}
+        # Best-effort record (race-safe via unique index created on startup)
+        try:
+            await db.whatsapp_processed_messages.insert_one({
+                "meta_message_id": meta_message_id,
+                "wa_id": wa_id,
+                "processed_at": datetime.now(timezone.utc),
+            })
+        except Exception:
+            # If another concurrent worker won the race, treat as duplicate
+            logger.info("[AI] Race on wamid=%s — skipping", meta_message_id)
+            return {"action": "duplicate_skipped", "meta_message_id": meta_message_id}
 
     found = await find_or_create_contact_conversation(
         db, route=route, wa_id=wa_id, name=name, first_text=text,
@@ -206,16 +234,19 @@ async def append_incoming_message(db, *, route: dict, wa_id: str, name: str, tex
             except Exception as e:
                 logger.exception("[AI] failed to send via Meta: %s", e)
 
-            # 2) Mirror as outgoing in Chatwoot so the human agent sees it
+            # 2) Mirror as a PRIVATE NOTE in Chatwoot so the human agent sees
+            #    what the bot said without Chatwoot's webhook firing back and
+            #    causing a duplicate WhatsApp send.
             try:
                 await post_message(
                     account_id=route["chatwoot_account_id"],
                     user_token=route["chatwoot_user_token"],
                     conversation_id=found["conversation_id"],
-                    content=reply_text,
+                    content=f"🤖 {reply_text}",
                     incoming=False,
+                    private=True,
                 )
-                logger.info("[AI] Mirrored reply into Chatwoot")
+                logger.info("[AI] Mirrored reply into Chatwoot as private note")
             except Exception as e:
                 logger.exception("[AI] failed to mirror to Chatwoot: %s", e)
         else:

@@ -255,3 +255,10 @@ async def ensure_indexes(db) -> None:
     await db.subscriptions.create_index("user_id")
     await db.wallets.create_index("user_id", unique=True)
     await db.login_attempts.create_index("identifier")
+    # Idempotency for incoming WhatsApp messages — prevents duplicate AI replies
+    # when Meta retries the same webhook.
+    await db.whatsapp_processed_messages.create_index("meta_message_id", unique=True)
+    # Auto-expire processed-message records after 7 days to keep collection small.
+    await db.whatsapp_processed_messages.create_index(
+        "processed_at", expireAfterSeconds=7 * 24 * 3600,
+    )

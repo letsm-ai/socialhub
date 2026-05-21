@@ -1215,6 +1215,7 @@ async def whatsapp_webhook_event(request: Request):
                     wa_id=m["wa_id"],
                     name=m["name"],
                     text=m["text"],
+                    meta_message_id=m.get("message_id"),
                 )
                 event_doc["routing"].append({"wa_id": m["wa_id"], "status": "ok", **result})
             except Exception as e:
