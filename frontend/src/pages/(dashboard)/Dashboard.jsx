@@ -81,7 +81,7 @@ export default function Dashboard() {
         return;
       }
     } catch (_) { /* fall through to direct open */ }
-    window.open("https://letsm.io", "_blank", "noopener,noreferrer");
+    window.open("https://inbox.letsm.io", "_blank", "noopener,noreferrer");
   };
 
   return (

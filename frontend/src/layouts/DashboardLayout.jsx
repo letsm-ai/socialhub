@@ -3,6 +3,7 @@ import { Outlet, useNavigate, useLocation } from "react-router-dom";
 import MiniSidebar from "@/components/shared/MiniSidebar";
 import { useLang } from "@/contexts/LanguageContext";
 import { useAuth } from "@/contexts/AuthContext";
+import { api } from "@/contexts/AuthContext";
 import {
   Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
 } from "@/components/ui/tooltip";
@@ -19,17 +20,30 @@ export default function DashboardLayout() {
   const navigate = useNavigate();
   const loc = useLocation();
 
+  const openInbox = async (e) => {
+    e?.preventDefault?.();
+    try {
+      const { data } = await api.post("/me/chatwoot/sso");
+      if (data?.sso_url) {
+        window.open(data.sso_url, "_blank", "noopener,noreferrer");
+        return;
+      }
+    } catch (_) { /* fallthrough */ }
+    window.open("https://inbox.letsm.io", "_blank", "noopener,noreferrer");
+  };
+
   const navItems = [
     { to: "/dashboard", label: lang === "ar" ? "نظرة عامة" : "Overview", icon: LayoutDashboard, testId: "side-overview" },
     { to: "/dashboard/channels", label: lang === "ar" ? "القنوات" : "Channels", icon: Plug, testId: "side-channels" },
     { to: "/dashboard/billing", label: lang === "ar" ? "الفوترة" : "Billing", icon: CreditCard, testId: "side-billing" },
     { to: "/dashboard/wallet", label: lang === "ar" ? "المحفظة" : "Wallet", icon: Wallet, testId: "side-wallet" },
     {
-      to: "https://letsm.io",
+      to: "#",
       label: lang === "ar" ? "صندوق الرسائل" : "Inbox",
       icon: MessageSquare,
       testId: "side-inbox-external",
       external: true,
+      onClick: openInbox,
     },
   ];
 
