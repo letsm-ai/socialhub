@@ -37,6 +37,13 @@ except Exception as e:  # pragma: no cover
     logger.warning("emergentintegrations not available: %s — AI replies disabled", e)
     _LLM_AVAILABLE = False
 
+try:
+    from openai import AsyncOpenAI  # type: ignore
+    _OPENAI_SDK_AVAILABLE = True
+except Exception as e:  # pragma: no cover
+    logger.warning("openai SDK not available: %s — direct OpenAI provider disabled", e)
+    _OPENAI_SDK_AVAILABLE = False
+
 
 # ---------- Constants ----------------------------------------------------
 
@@ -99,12 +106,38 @@ async def get_settings(db) -> dict:
             "fallback_message_en": "I'm not sure about that one. Let me have a team member follow up with you shortly.",
             "website_url": "https://app.letsm.io",
             "model": "gpt-4o",
+            "llm_provider": "emergent",   # "emergent" | "openai"
+            "openai_api_key": "",          # used only when llm_provider == "openai"
         }
+    # Ensure newer fields exist for older rows
+    s.setdefault("llm_provider", "emergent")
+    s.setdefault("openai_api_key", "")
     return s
+
+
+def mask_settings_for_client(s: dict) -> dict:
+    """Returns a copy of settings safe to send to the admin UI:
+    replaces openai_api_key with a preview only."""
+    out = dict(s)
+    key = (out.get("openai_api_key") or "").strip()
+    if key:
+        out["openai_api_key_preview"] = (key[:6] + "…" + key[-4:]) if len(key) > 12 else "set"
+    else:
+        out["openai_api_key_preview"] = None
+    out["openai_api_key"] = ""  # never leak the raw key
+    return out
 
 
 async def update_settings(db, patch: dict) -> dict:
     patch.pop("_id", None)
+    # Don't overwrite the stored key when the client sends empty/null (the UI
+    # masks it by default — empty means "leave it as is").
+    if not (patch.get("openai_api_key") or "").strip():
+        patch.pop("openai_api_key", None)
+    else:
+        patch["openai_api_key"] = patch["openai_api_key"].strip()
+    if "llm_provider" in patch and patch["llm_provider"] not in ("emergent", "openai"):
+        patch.pop("llm_provider")
     await db.ai_settings.update_one(
         {"_id": "global"},
         {"$set": patch, "$currentDate": {"updated_at": True}},
@@ -215,52 +248,105 @@ async def generate_reply(
     Returns (reply, lang). reply=None means "do not send" (e.g. AI disabled,
     handoff already, LLM error). lang is what we detected.
     """
-    if not _LLM_AVAILABLE:
-        logger.warning("[AI] generate_reply skipped — emergentintegrations not importable")
-        return None, "ar"
-
-    api_key = (os.environ.get("EMERGENT_LLM_KEY") or "").strip()
-    if not api_key:
-        logger.warning("[AI] EMERGENT_LLM_KEY not set — AI reply skipped")
-        return None, "ar"
-
     settings = await get_settings(db)
     if not settings.get("enabled", True):
         logger.info("[AI] disabled in ai_settings — skipping reply")
         return None, "ar"
 
+    provider = (settings.get("llm_provider") or "emergent").lower()
     lang = detect_lang(text)
     knowledge_block = await _gather_knowledge(db, lang)
     system_prompt = _build_system_prompt(settings, knowledge_block, lang)
     model = settings.get("model") or "gpt-4o"
+    session_id = f"wa-{conversation_id}"
+
     logger.info(
-        "[AI] generate_reply | model=%s lang=%s convo=%s kb_chars=%d text_chars=%d",
-        model, lang, conversation_id, len(knowledge_block or ""), len(text or ""),
+        "[AI] generate_reply | provider=%s model=%s lang=%s convo=%s kb_chars=%d text_chars=%d",
+        provider, model, lang, conversation_id, len(knowledge_block or ""), len(text or ""),
     )
 
-    session_id = f"wa-{conversation_id}"
     try:
-        chat = LlmChat(api_key=api_key, session_id=session_id, system_message=system_prompt).with_model("openai", model)
-        # Replay last few messages for context (last 6 exchanges = 12 msgs)
-        if history:
-            for h in history[-12:]:
-                role = h.get("role")
-                content = h.get("content") or ""
-                if role == "user" and content.strip():
-                    try:
-                        await chat.send_message(UserMessage(text=content))
-                    except Exception:
-                        # If history send fails, continue — we'll still answer the live message
-                        pass
-        response = await chat.send_message(UserMessage(text=text))
-        reply = (response or "").strip()
-        logger.info("[AI] LLM responded | chars=%d preview=%r", len(reply), reply[:120])
-        if not reply:
-            reply = settings.get(f"fallback_message_{lang}") or ""
-        return reply, lang
+        if provider == "openai":
+            reply = await _generate_with_openai(
+                settings=settings,
+                system_prompt=system_prompt,
+                user_text=text,
+                history=history,
+                model=model,
+            )
+        else:
+            reply = await _generate_with_emergent(
+                system_prompt=system_prompt,
+                user_text=text,
+                history=history,
+                model=model,
+                session_id=session_id,
+            )
     except Exception as e:
-        logger.exception("[AI] generation failed: %s", e)
+        logger.exception("[AI] generation failed (%s): %s", provider, e)
         return None, lang
+
+    if reply is None:
+        return None, lang
+
+    reply = (reply or "").strip()
+    logger.info("[AI] LLM responded | chars=%d preview=%r", len(reply), reply[:120])
+    if not reply:
+        reply = settings.get(f"fallback_message_{lang}") or ""
+    return reply, lang
+
+
+async def _generate_with_emergent(
+    *, system_prompt: str, user_text: str, history: Optional[list[dict]],
+    model: str, session_id: str,
+) -> Optional[str]:
+    if not _LLM_AVAILABLE:
+        logger.warning("[AI] emergentintegrations not importable — cannot use emergent provider")
+        return None
+    api_key = (os.environ.get("EMERGENT_LLM_KEY") or "").strip()
+    if not api_key:
+        logger.warning("[AI] EMERGENT_LLM_KEY not set — emergent provider skipped")
+        return None
+    chat = LlmChat(api_key=api_key, session_id=session_id, system_message=system_prompt).with_model("openai", model)
+    if history:
+        for h in history[-12:]:
+            if h.get("role") == "user" and (h.get("content") or "").strip():
+                try:
+                    await chat.send_message(UserMessage(text=h["content"]))
+                except Exception:
+                    pass
+    response = await chat.send_message(UserMessage(text=user_text))
+    return response or ""
+
+
+async def _generate_with_openai(
+    *, settings: dict, system_prompt: str, user_text: str,
+    history: Optional[list[dict]], model: str,
+) -> Optional[str]:
+    if not _OPENAI_SDK_AVAILABLE:
+        logger.warning("[AI] openai SDK not importable — cannot use openai provider")
+        return None
+    key = (settings.get("openai_api_key") or "").strip() or (os.environ.get("OPENAI_API_KEY") or "").strip()
+    if not key:
+        logger.warning("[AI] openai provider selected but no openai_api_key stored")
+        return None
+    client = AsyncOpenAI(api_key=key)
+    messages = [{"role": "system", "content": system_prompt}]
+    if history:
+        for h in history[-12:]:
+            role = h.get("role")
+            content = (h.get("content") or "").strip()
+            if role in ("user", "assistant") and content:
+                messages.append({"role": role, "content": content})
+    messages.append({"role": "user", "content": user_text})
+    resp = await client.chat.completions.create(
+        model=model,
+        messages=messages,
+        temperature=0.3,
+    )
+    if not resp.choices:
+        return ""
+    return (resp.choices[0].message.content or "").strip()
 
 
 async def handle_incoming(

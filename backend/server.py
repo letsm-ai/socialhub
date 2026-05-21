@@ -1386,6 +1386,8 @@ class AISettingsPatch(BaseModel):
     fallback_message_en: Optional[str] = None
     website_url: Optional[str] = None
     model: Optional[str] = None
+    llm_provider: Optional[str] = None  # "emergent" | "openai"
+    openai_api_key: Optional[str] = None  # empty → keep existing
 
 
 class AIKnowledgePayload(BaseModel):
@@ -1396,13 +1398,15 @@ class AIKnowledgePayload(BaseModel):
 
 @api_router.get("/admin/ai/settings")
 async def admin_get_ai_settings(admin: dict = Depends(_current_admin)):
-    return await ai_agent.get_settings(db)
+    s = await ai_agent.get_settings(db)
+    return ai_agent.mask_settings_for_client(s)
 
 
 @api_router.put("/admin/ai/settings")
 async def admin_update_ai_settings(patch: AISettingsPatch, admin: dict = Depends(_current_admin)):
     data = {k: v for k, v in patch.model_dump().items() if v is not None}
-    return await ai_agent.update_settings(db, data)
+    s = await ai_agent.update_settings(db, data)
+    return ai_agent.mask_settings_for_client(s)
 
 
 @api_router.get("/admin/ai/knowledge")
@@ -1453,17 +1457,32 @@ async def admin_ai_diagnostics(admin: dict = Depends(_current_admin)):
     Returns the live status of the AI subsystem so the admin can see at a
     glance why the bot may not be replying.
     """
-    settings = await ai_agent.get_settings(db)
-    key = (os.environ.get("EMERGENT_LLM_KEY") or "").strip()
+    settings_raw = await ai_agent.get_settings(db)
+    settings = ai_agent.mask_settings_for_client(settings_raw)
+    provider = (settings_raw.get("llm_provider") or "emergent").lower()
+    emergent_key = (os.environ.get("EMERGENT_LLM_KEY") or "").strip()
+    openai_key_stored = bool((settings_raw.get("openai_api_key") or "").strip())
     kb_count = await db.ai_knowledge.count_documents({})
     routes_count = await db.whatsapp_routes.count_documents({})
     last_events = await db.whatsapp_events.find(
         {}, {"_id": 0, "received_at": 1, "routing": 1}
     ).sort("received_at", -1).to_list(length=5)
+
+    # provider readiness check
+    if provider == "openai":
+        provider_ready = bool(getattr(ai_agent, "_OPENAI_SDK_AVAILABLE", False)) and openai_key_stored
+    else:
+        provider_ready = bool(getattr(ai_agent, "_LLM_AVAILABLE", False)) and bool(emergent_key)
+
     return {
+        "provider": provider,
+        "provider_ready": provider_ready,
         "llm_available": getattr(ai_agent, "_LLM_AVAILABLE", False),
-        "emergent_llm_key_present": bool(key),
-        "emergent_llm_key_preview": (key[:6] + "…" + key[-4:]) if key else None,
+        "openai_sdk_available": getattr(ai_agent, "_OPENAI_SDK_AVAILABLE", False),
+        "emergent_llm_key_present": bool(emergent_key),
+        "emergent_llm_key_preview": (emergent_key[:6] + "…" + emergent_key[-4:]) if emergent_key else None,
+        "openai_api_key_stored": openai_key_stored,
+        "openai_api_key_preview": settings.get("openai_api_key_preview"),
         "settings": settings,
         "knowledge_entries": kb_count,
         "whatsapp_routes": routes_count,

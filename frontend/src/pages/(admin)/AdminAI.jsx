@@ -8,7 +8,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { useLang } from "@/contexts/LanguageContext";
 import { api } from "@/contexts/AuthContext";
-import { Bot, Plus, Trash2, Loader2, BookOpen, Sparkles, AlertCircle, Save, Stethoscope, Send, CheckCircle2, XCircle } from "lucide-react";
+import { Bot, Plus, Trash2, Loader2, BookOpen, Sparkles, AlertCircle, Save, Stethoscope, Send, CheckCircle2, XCircle, Key, Zap, Eye, EyeOff } from "lucide-react";
 
 export default function AdminAI() {
   const { lang } = useLang();
@@ -28,6 +28,8 @@ export default function AdminAI() {
   );
   const [testResult, setTestResult] = useState(null);
   const [testing, setTesting] = useState(false);
+  const [openaiKeyDraft, setOpenaiKeyDraft] = useState("");
+  const [showOpenaiKey, setShowOpenaiKey] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -53,8 +55,15 @@ export default function AdminAI() {
   const saveSettings = async () => {
     setSaving(true);
     try {
-      const { data } = await api.put("/admin/ai/settings", settings);
+      const payload = { ...settings };
+      if (openaiKeyDraft.trim()) {
+        payload.openai_api_key = openaiKeyDraft.trim();
+      } else {
+        delete payload.openai_api_key; // leave existing untouched
+      }
+      const { data } = await api.put("/admin/ai/settings", payload);
       setSettings(data);
+      setOpenaiKeyDraft("");
       setError("");
     } catch (e) {
       setError(e?.response?.data?.detail || "Save failed");
@@ -158,6 +167,163 @@ export default function AdminAI() {
           <AlertCircle size={16} /> {error}
         </div>
       )}
+
+      {/* LLM Provider */}
+      <Card data-testid="llm-provider-card">
+        <CardHeader>
+          <CardTitle className="text-lg flex items-center gap-2">
+            <Key size={18} className="text-emerald-700" />
+            {t("مزوّد الذكاء الاصطناعي", "AI Provider")}
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid sm:grid-cols-2 gap-3">
+            <button
+              type="button"
+              data-testid="provider-emergent"
+              onClick={() => setSettings({ ...settings, llm_provider: "emergent" })}
+              className={`text-start rounded-2xl border p-4 transition ${
+                (settings.llm_provider || "emergent") === "emergent"
+                  ? "border-emerald-700 bg-emerald-50 ring-2 ring-emerald-200"
+                  : "border-stone-200 bg-white hover:border-stone-300"
+              }`}
+            >
+              <div className="flex items-center justify-between gap-2 mb-1.5">
+                <span className="font-semibold flex items-center gap-2 text-stone-900">
+                  <Zap size={16} className="text-emerald-700" />
+                  {t("مفتاح Emergent (تلقائي)", "Emergent key (default)")}
+                </span>
+                {(settings.llm_provider || "emergent") === "emergent" && (
+                  <Badge className="bg-emerald-700 text-white hover:bg-emerald-700 text-[10px]">
+                    {t("الحالي", "ACTIVE")}
+                  </Badge>
+                )}
+              </div>
+              <p className="text-xs text-stone-600 leading-relaxed">
+                {t(
+                  "يستخدم رصيد Emergent. مفتاح واحد لـ GPT-4o و Claude و Gemini.",
+                  "Uses your Emergent balance. One key for GPT-4o, Claude, and Gemini."
+                )}
+              </p>
+            </button>
+
+            <button
+              type="button"
+              data-testid="provider-openai"
+              onClick={() => setSettings({ ...settings, llm_provider: "openai" })}
+              className={`text-start rounded-2xl border p-4 transition ${
+                settings.llm_provider === "openai"
+                  ? "border-emerald-700 bg-emerald-50 ring-2 ring-emerald-200"
+                  : "border-stone-200 bg-white hover:border-stone-300"
+              }`}
+            >
+              <div className="flex items-center justify-between gap-2 mb-1.5">
+                <span className="font-semibold flex items-center gap-2 text-stone-900">
+                  <Key size={16} className="text-emerald-700" />
+                  {t("مفتاح OpenAI الخاص فيك", "Your own OpenAI key")}
+                </span>
+                {settings.llm_provider === "openai" && (
+                  <Badge className="bg-emerald-700 text-white hover:bg-emerald-700 text-[10px]">
+                    {t("الحالي", "ACTIVE")}
+                  </Badge>
+                )}
+              </div>
+              <p className="text-xs text-stone-600 leading-relaxed">
+                {t(
+                  "الفوترة تذهب مباشرة إلى حسابك في OpenAI. تحكم كامل في الموديل والاستخدام.",
+                  "Billing goes directly to your OpenAI account. Full control over model and usage."
+                )}
+              </p>
+            </button>
+          </div>
+
+          {settings.llm_provider === "openai" && (
+            <div className="rounded-2xl border border-stone-200 bg-stone-50/50 p-4 space-y-3">
+              <Label className="text-stone-700">
+                {t("مفتاح OpenAI API", "OpenAI API key")}{" "}
+                <span className="text-stone-400 font-normal text-xs">
+                  ({t("يبدأ بـ", "starts with")} <code>sk-</code>)
+                </span>
+              </Label>
+              {settings.openai_api_key_preview ? (
+                <div className="flex items-center gap-2 text-sm text-stone-600">
+                  <CheckCircle2 size={14} className="text-emerald-600" />
+                  {t("المفتاح محفوظ:", "Stored key:")}{" "}
+                  <code className="bg-white border border-stone-200 px-2 py-0.5 rounded text-xs">
+                    {settings.openai_api_key_preview}
+                  </code>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 text-sm text-amber-700">
+                  <AlertCircle size={14} />
+                  {t("لم يتم حفظ أي مفتاح بعد.", "No key stored yet.")}
+                </div>
+              )}
+              <div className="relative">
+                <Input
+                  data-testid="openai-api-key-input"
+                  type={showOpenaiKey ? "text" : "password"}
+                  value={openaiKeyDraft}
+                  onChange={(e) => setOpenaiKeyDraft(e.target.value)}
+                  placeholder={
+                    settings.openai_api_key_preview
+                      ? t("اتركه فارغاً للإبقاء على المفتاح الحالي", "Leave blank to keep current key")
+                      : "sk-proj-..."
+                  }
+                  className="pr-10 font-mono text-sm"
+                  dir="ltr"
+                />
+                <button
+                  type="button"
+                  data-testid="toggle-openai-key-visibility"
+                  onClick={() => setShowOpenaiKey((v) => !v)}
+                  className="absolute end-2 top-1/2 -translate-y-1/2 text-stone-400 hover:text-stone-600"
+                >
+                  {showOpenaiKey ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              </div>
+              <p className="text-[11px] text-stone-500 leading-relaxed">
+                {t(
+                  "احصل على المفتاح من ",
+                  "Get a key from "
+                )}
+                <a
+                  href="https://platform.openai.com/api-keys"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-emerald-700 underline"
+                >
+                  platform.openai.com/api-keys
+                </a>
+                {t(
+                  ". المفتاح يُحفظ مشفّراً في قاعدة البيانات ولا يُعرض كاملاً مرة أخرى.",
+                  ". The key is stored privately and never displayed in full again."
+                )}
+              </p>
+            </div>
+          )}
+
+          <div className="grid sm:grid-cols-2 gap-4 pt-2">
+            <div>
+              <Label className="text-stone-700 mb-2 block">
+                {t("الموديل", "Model")}
+              </Label>
+              <select
+                data-testid="ai-model-select"
+                value={settings.model || "gpt-4o"}
+                onChange={(e) => setSettings({ ...settings, model: e.target.value })}
+                className="w-full border border-stone-300 rounded-lg px-3 py-2 text-sm bg-white"
+                dir="ltr"
+              >
+                <option value="gpt-4o">gpt-4o ({t("متوازن", "balanced")})</option>
+                <option value="gpt-4o-mini">gpt-4o-mini ({t("أسرع وأرخص", "fast & cheap")})</option>
+                <option value="gpt-4-turbo">gpt-4-turbo</option>
+                <option value="gpt-3.5-turbo">gpt-3.5-turbo</option>
+              </select>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Personality */}
       <Card>
@@ -276,8 +442,21 @@ export default function AdminAI() {
             </Button>
             {diag && (
               <div className="flex flex-wrap gap-2 text-xs" data-testid="diag-badges">
-                <StatusBadge ok={diag.llm_available} label={t("مكتبة AI", "LLM lib")} />
-                <StatusBadge ok={diag.emergent_llm_key_present} label={t("مفتاح Emergent", "Emergent key")} />
+                <StatusBadge
+                  ok={diag.provider_ready}
+                  label={t(`المزوّد جاهز (${diag.provider})`, `Provider ready (${diag.provider})`)}
+                />
+                {diag.provider === "emergent" ? (
+                  <>
+                    <StatusBadge ok={diag.llm_available} label={t("مكتبة AI", "LLM lib")} />
+                    <StatusBadge ok={diag.emergent_llm_key_present} label={t("مفتاح Emergent", "Emergent key")} />
+                  </>
+                ) : (
+                  <>
+                    <StatusBadge ok={diag.openai_sdk_available} label={t("OpenAI SDK", "OpenAI SDK")} />
+                    <StatusBadge ok={diag.openai_api_key_stored} label={t("مفتاح OpenAI", "OpenAI key")} />
+                  </>
+                )}
                 <StatusBadge ok={!!diag.settings?.enabled} label={t("البوت مُفعّل", "Bot enabled")} />
                 <StatusBadge ok={diag.knowledge_entries > 0} label={t(`معرفة: ${diag.knowledge_entries}`, `KB: ${diag.knowledge_entries}`)} />
                 <StatusBadge ok={diag.whatsapp_routes > 0} label={t(`مسارات: ${diag.whatsapp_routes}`, `Routes: ${diag.whatsapp_routes}`)} />
@@ -285,11 +464,28 @@ export default function AdminAI() {
             )}
           </div>
 
-          {diag?.emergent_llm_key_preview && (
+          {diag && (
             <p className="text-xs text-stone-500" data-testid="diag-key-preview">
-              {t("المفتاح:", "Key:")} <code className="bg-stone-100 px-1.5 py-0.5 rounded">{diag.emergent_llm_key_preview}</code>
+              {t("المزوّد:", "Provider:")} <code className="bg-stone-100 px-1.5 py-0.5 rounded">{diag.provider}</code>
               {" · "}
-              {t("الموديل:", "Model:")} <code className="bg-stone-100 px-1.5 py-0.5 rounded">{diag.settings?.model || "gpt-4o"}</code>
+              {diag.provider === "emergent" ? (
+                <>
+                  {t("المفتاح:", "Key:")}{" "}
+                  <code className="bg-stone-100 px-1.5 py-0.5 rounded">
+                    {diag.emergent_llm_key_preview || t("غير موجود", "missing")}
+                  </code>
+                </>
+              ) : (
+                <>
+                  {t("المفتاح:", "Key:")}{" "}
+                  <code className="bg-stone-100 px-1.5 py-0.5 rounded">
+                    {diag.openai_api_key_preview || t("غير محفوظ", "not stored")}
+                  </code>
+                </>
+              )}
+              {" · "}
+              {t("الموديل:", "Model:")}{" "}
+              <code className="bg-stone-100 px-1.5 py-0.5 rounded">{diag.settings?.model || "gpt-4o"}</code>
             </p>
           )}
 
