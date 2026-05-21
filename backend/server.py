@@ -28,6 +28,7 @@ from auth import (
     seed_admin, ensure_indexes,
 )
 import ai_agent
+import broadcasts as broadcasts_mod
 import chatwoot_client
 import email_service
 import whatsapp_meta
@@ -809,6 +810,31 @@ async def admin_set_role(client_id: str, payload: AdminRoleRequest, admin: dict 
     return {"ok": True, "user_id": client_id, "role": role, "email": user.get("email")}
 
 
+@api_router.post("/admin/chatwoot/downgrade-clients-to-agent")
+async def admin_downgrade_chatwoot_clients(admin: dict = Depends(_current_admin)):
+    """One-shot tool: every CLIENT user with a Chatwoot account is downgraded
+    from administrator → agent so they can no longer create inboxes/integrations
+    inside Chatwoot. WhatsApp & channel setup must go through SocialHub.
+
+    Idempotent: re-running just re-asserts the agent role for everyone."""
+    clients = await db.users.find(
+        {"role": "CLIENT", "chatwoot_account_id": {"$ne": None}, "chatwoot_user_id": {"$ne": None}},
+        {"_id": 0, "id": 1, "email": 1, "chatwoot_account_id": 1, "chatwoot_user_id": 1},
+    ).to_list(length=10000)
+    results = []
+    for u in clients:
+        try:
+            await chatwoot_client.set_user_role(
+                account_id=u["chatwoot_account_id"],
+                user_id=u["chatwoot_user_id"],
+                role="agent",
+            )
+            results.append({"email": u["email"], "ok": True})
+        except Exception as e:
+            results.append({"email": u["email"], "ok": False, "error": str(e)[:200]})
+    return {"total": len(clients), "results": results}
+
+
 @api_router.post("/admin/clients/{client_id}/status")
 async def admin_set_status(client_id: str, payload: AdminStatusRequest, admin: dict = Depends(_current_admin)):
     user = await db.users.find_one({"id": client_id})
@@ -1456,6 +1482,32 @@ async def admin_release(conversation_id: int, admin: dict = Depends(_current_adm
     return {"ok": True, "conversation_id": conversation_id, "handoff": False}
 
 
+@api_router.get("/admin/conversations/active")
+async def admin_list_active_conversations(admin: dict = Depends(_current_admin)):
+    """Live view of every WhatsApp conversation the bot has touched, including
+    handoff state, message count, last reply, and the customer's wa_id/name."""
+    convos = await db.ai_conversations.find({}, {"_id": 0}).sort("last_reply_at", -1).to_list(length=200)
+    # Enrich with contact info from whatsapp_contacts
+    out = []
+    for c in convos:
+        cid = c.get("conversation_id")
+        contact = await db.whatsapp_contacts.find_one(
+            {"conversation_id": cid}, {"_id": 0, "wa_id": 1, "name": 1, "phone_number_id": 1},
+        ) or {}
+        out.append({
+            "conversation_id": cid,
+            "wa_id": contact.get("wa_id"),
+            "contact_name": contact.get("name"),
+            "phone_number_id": contact.get("phone_number_id"),
+            "handoff": bool(c.get("handoff")),
+            "handoff_at": c.get("handoff_at"),
+            "last_reply_at": c.get("last_reply_at"),
+            "message_count": c.get("message_count") or 0,
+            "consecutive_fallbacks": c.get("consecutive_fallbacks") or 0,
+        })
+    return {"items": out}
+
+
 @api_router.get("/admin/ai/diagnostics")
 async def admin_ai_diagnostics(admin: dict = Depends(_current_admin)):
     """
@@ -1526,6 +1578,132 @@ async def admin_ai_test_reply(payload: AITestReplyPayload, admin: dict = Depends
 
 
 # ============================
+# WhatsApp Broadcasts (admin)
+# ============================
+class BroadcastRecipientIn(BaseModel):
+    phone: str
+    name: Optional[str] = None
+    params: Optional[dict] = None
+
+
+class CreateBroadcastPayload(BaseModel):
+    name: Optional[str] = None
+    template_name: str
+    template_language: str = "ar"
+    params_template: list[str] = Field(default_factory=list)
+    scheduled_at: Optional[datetime] = None  # ISO; None or past → send immediately
+    # One of these three must be present:
+    csv_text: Optional[str] = None
+    plain_numbers: Optional[str] = None
+    recipients: Optional[list[BroadcastRecipientIn]] = None
+
+
+@api_router.get("/admin/whatsapp/templates")
+async def admin_whatsapp_templates(admin: dict = Depends(_current_admin)):
+    """Fetches Meta-approved templates for the configured WABA."""
+    cfg = whatsapp_meta.get_config()
+    waba_id = cfg.get("waba_id")
+    if not waba_id:
+        raise HTTPException(status_code=400, detail="WHATSAPP_BUSINESS_ACCOUNT_ID not configured")
+    try:
+        resp = await whatsapp_meta.list_message_templates(waba_id)
+    except Exception as e:
+        logger.exception("list_message_templates failed: %s", e)
+        raise HTTPException(status_code=502, detail=f"meta_templates_failed: {e}")
+    items = resp.get("data") or []
+    # Pre-process: extract body placeholders from each template
+    out = []
+    for t in items:
+        body_text = ""
+        placeholder_count = 0
+        for c in t.get("components") or []:
+            if (c.get("type") or "").upper() == "BODY":
+                body_text = c.get("text") or ""
+                # Count {{1}}, {{2}}, ...
+                import re as _re
+                placeholder_count = len(set(_re.findall(r"\{\{\s*(\d+)\s*\}\}", body_text)))
+                break
+        out.append({
+            "name": t.get("name"),
+            "language": t.get("language"),
+            "status": t.get("status"),
+            "category": t.get("category"),
+            "body": body_text,
+            "placeholder_count": placeholder_count,
+        })
+    return {"items": out}
+
+
+@api_router.post("/admin/whatsapp/broadcasts")
+async def admin_create_broadcast(
+    payload: CreateBroadcastPayload, admin: dict = Depends(_current_admin),
+):
+    # Resolve recipients
+    recipients: list[dict] = []
+    if payload.csv_text:
+        recipients = broadcasts_mod.parse_csv(payload.csv_text)
+    elif payload.plain_numbers:
+        recipients = broadcasts_mod.parse_plain_numbers(payload.plain_numbers)
+    elif payload.recipients:
+        for r in payload.recipients:
+            wa = broadcasts_mod.normalize_phone(r.phone)
+            if wa:
+                recipients.append({
+                    "phone": wa,
+                    "name": r.name or wa,
+                    "params": r.params or {},
+                })
+    if not recipients:
+        raise HTTPException(status_code=422, detail="no_valid_recipients")
+    # Dedupe within request (preserve order, keep first)
+    seen = set()
+    deduped = []
+    for r in recipients:
+        if r["phone"] in seen:
+            continue
+        seen.add(r["phone"])
+        deduped.append(r)
+
+    try:
+        broadcast = await broadcasts_mod.create_broadcast(
+            db,
+            name=payload.name or payload.template_name,
+            template_name=payload.template_name,
+            template_language=payload.template_language,
+            params_template=payload.params_template,
+            recipients=deduped,
+            scheduled_at=payload.scheduled_at,
+            created_by=admin.get("id"),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    return broadcast
+
+
+@api_router.get("/admin/whatsapp/broadcasts")
+async def admin_list_broadcasts(admin: dict = Depends(_current_admin)):
+    return {"items": await broadcasts_mod.list_broadcasts(db)}
+
+
+@api_router.get("/admin/whatsapp/broadcasts/{bid}")
+async def admin_get_broadcast(bid: str, admin: dict = Depends(_current_admin)):
+    b = await broadcasts_mod.get_broadcast(db, bid)
+    if not b:
+        raise HTTPException(status_code=404, detail="not_found")
+    return b
+
+
+@api_router.get("/admin/whatsapp/broadcasts/{bid}/recipients")
+async def admin_get_broadcast_recipients(bid: str, admin: dict = Depends(_current_admin)):
+    return {"items": await broadcasts_mod.get_broadcast_recipients(db, bid)}
+
+
+@api_router.post("/admin/whatsapp/broadcasts/{bid}/cancel")
+async def admin_cancel_broadcast(bid: str, admin: dict = Depends(_current_admin)):
+    return await broadcasts_mod.cancel_broadcast(db, bid)
+
+
+# ============================
 # Stripe webhook (placeholder)
 # ============================
 @api_router.post("/stripe/webhook")
@@ -1577,9 +1755,14 @@ logger = logging.getLogger(__name__)
 async def on_startup():
     await ensure_indexes(db)
     await seed_admin(db)
-    logger.info("SocialHub API started — indexes ensured, admin seeded.")
+    # Background broadcast processor
+    app.state.broadcasts_task = asyncio.create_task(broadcasts_mod.worker_loop(db))
+    logger.info("SocialHub API started — indexes ensured, admin seeded, broadcasts worker started.")
 
 
 @app.on_event("shutdown")
 async def on_shutdown():
+    task = getattr(app.state, "broadcasts_task", None)
+    if task:
+        task.cancel()
     client.close()

@@ -176,6 +176,69 @@ async def send_text_message(phone_number_id: str, to: str, body: str) -> Dict[st
 
 
 # ---------------------------------------------------------------------------
+# Message templates (for broadcasts)
+# ---------------------------------------------------------------------------
+async def list_message_templates(waba_id: str, limit: int = 100) -> Dict[str, Any]:
+    """GET /{waba_id}/message_templates — list all templates for a WABA."""
+    cfg = get_config()
+    params = {
+        "access_token": cfg["system_user_token"],
+        "fields": "name,language,status,category,components",
+        "limit": limit,
+    }
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        resp = await client.get(_graph_url(f"{waba_id}/message_templates"), params=params)
+        if resp.status_code >= 400:
+            logger.error("list_message_templates failed [%s]: %s", resp.status_code, resp.text)
+            resp.raise_for_status()
+        return resp.json()
+
+
+async def send_template_message(
+    phone_number_id: str,
+    to: str,
+    template_name: str,
+    language_code: str,
+    body_parameters: Optional[list[str]] = None,
+) -> Dict[str, Any]:
+    """Send a Meta-approved template message.
+
+    `body_parameters` is the list of positional body variables ({{1}}, {{2}}, …).
+    For now we only support the BODY component (no header media, no buttons).
+    """
+    cfg = get_config()
+    headers = {
+        "Authorization": f"Bearer {cfg['system_user_token']}",
+        "Content-Type": "application/json",
+    }
+    template: Dict[str, Any] = {
+        "name": template_name,
+        "language": {"code": language_code},
+    }
+    if body_parameters:
+        template["components"] = [{
+            "type": "body",
+            "parameters": [{"type": "text", "text": str(p)} for p in body_parameters],
+        }]
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": to,
+        "type": "template",
+        "template": template,
+    }
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        resp = await client.post(
+            _graph_url(f"{phone_number_id}/messages"), headers=headers, json=payload,
+        )
+        if resp.status_code >= 400:
+            logger.error(
+                "send_template_message failed [%s]: %s body=%s", resp.status_code, resp.text, payload,
+            )
+            resp.raise_for_status()
+        return resp.json()
+
+
+# ---------------------------------------------------------------------------
 # Full provisioning flow
 # ---------------------------------------------------------------------------
 async def provision_whatsapp(

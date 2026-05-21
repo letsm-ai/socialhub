@@ -118,6 +118,10 @@ async def provision_for_user(user_doc: dict) -> dict:
     """
     Idempotent: provisions a Chatwoot account + user for the given SocialHub user.
     Returns {"account_id": int, "user_id": int, "access_token": str}.
+
+    Role: clients are linked as `agent` (not administrator) so they can NEVER
+    create or modify inboxes inside Chatwoot. WhatsApp linking, integrations,
+    and account settings are managed exclusively from SocialHub.
     """
     company = user_doc.get("company_name") or user_doc.get("name") or "SocialHub Client"
     acc = await create_account(name=company)
@@ -126,7 +130,7 @@ async def provision_for_user(user_doc: dict) -> dict:
     cw_user_id = cw_user["id"]
     cw_access_token = cw_user.get("access_token") or ""
     try:
-        await link_user_to_account(account_id, cw_user_id, role="administrator")
+        await link_user_to_account(account_id, cw_user_id, role="agent")
     except ChatwootError as e:
         # Roll back partial state on link failure
         logger.warning("Linking failed, rolling back account %s: %s", account_id, e)
@@ -136,6 +140,19 @@ async def provision_for_user(user_doc: dict) -> dict:
             pass
         raise
     return {"account_id": account_id, "user_id": cw_user_id, "access_token": cw_access_token}
+
+
+async def set_user_role(account_id: int, user_id: int, role: str = "agent") -> dict:
+    """Update an existing user's role inside an account (admin tool)."""
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        r = await client.patch(
+            f"{_base()}/platform/api/v1/accounts/{account_id}/account_users",
+            headers=_headers(),
+            json={"user_id": user_id, "role": role},
+        )
+        if r.status_code >= 400:
+            raise ChatwootError(f"set_user_role {r.status_code}: {r.text}")
+        return r.json() if r.text else {"ok": True}
 
 
 # ===========================================================

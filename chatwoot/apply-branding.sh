@@ -90,6 +90,32 @@ a[href*="chatwoot.com"][target="_blank"] {
 [data-testid="whats-new"] {
   display: none !important;
 }
+
+/* -----------------------------------------------------------------
+ * Hide ALL channel-connection paths. WhatsApp (and every other
+ * channel) is connected exclusively from the SocialHub dashboard so
+ * the end-client never sees a competing "Add Inbox" UI inside
+ * Chatwoot. Belt-and-suspenders on top of the agent-role restriction.
+ * ----------------------------------------------------------------- */
+
+/* "New Inbox" CTA on Settings > Inboxes page */
+a[href*="/settings/inboxes/new"],
+button[data-testid="add-new-inbox"],
+.button[href*="/inboxes/new"] {
+  display: none !important;
+}
+
+/* Inbox-creation full pages (defense in depth if someone enters URL) */
+[data-testid="page-channel-selector"],
+.channels {
+  pointer-events: none !important;
+}
+
+/* Hide the "Integrations" / "Channels" sub-nav entries inside Settings */
+.secondary-menu a[href*="/settings/integrations"],
+.secondary-menu a[href*="/settings/inboxes/new"] {
+  display: none !important;
+}
 CSS_EOF
 
 # Inject the CSS link into Chatwoot's index.html (idempotent — only adds once)
