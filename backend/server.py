@@ -1447,6 +1447,60 @@ async def admin_release(conversation_id: int, admin: dict = Depends(_current_adm
     return {"ok": True, "conversation_id": conversation_id, "handoff": False}
 
 
+@api_router.get("/admin/ai/diagnostics")
+async def admin_ai_diagnostics(admin: dict = Depends(_current_admin)):
+    """
+    Returns the live status of the AI subsystem so the admin can see at a
+    glance why the bot may not be replying.
+    """
+    settings = await ai_agent.get_settings(db)
+    key = (os.environ.get("EMERGENT_LLM_KEY") or "").strip()
+    kb_count = await db.ai_knowledge.count_documents({})
+    routes_count = await db.whatsapp_routes.count_documents({})
+    last_events = await db.whatsapp_events.find(
+        {}, {"_id": 0, "received_at": 1, "routing": 1}
+    ).sort("received_at", -1).to_list(length=5)
+    return {
+        "llm_available": getattr(ai_agent, "_LLM_AVAILABLE", False),
+        "emergent_llm_key_present": bool(key),
+        "emergent_llm_key_preview": (key[:6] + "…" + key[-4:]) if key else None,
+        "settings": settings,
+        "knowledge_entries": kb_count,
+        "whatsapp_routes": routes_count,
+        "recent_webhook_events": last_events,
+    }
+
+
+class AITestReplyPayload(BaseModel):
+    text: str
+    conversation_id: Optional[int] = 999999
+
+
+@api_router.post("/admin/ai/test-reply")
+async def admin_ai_test_reply(payload: AITestReplyPayload, admin: dict = Depends(_current_admin)):
+    """
+    Runs the full AI handler against a fake conversation so the admin can
+    verify the bot end-to-end without sending a real WhatsApp message.
+    Does NOT call Meta or Chatwoot.
+    """
+    text = (payload.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=422, detail="text is required")
+    convo_id = payload.conversation_id or 999999
+    try:
+        result = await ai_agent.handle_incoming(
+            db, conversation_id=convo_id, incoming_text=text,
+        )
+    except Exception as e:
+        logger.exception("[AI test-reply] failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"ai_error: {e}")
+    return {
+        "input": text,
+        "conversation_id": convo_id,
+        **result,
+    }
+
+
 # ============================
 # Stripe webhook (placeholder)
 # ============================

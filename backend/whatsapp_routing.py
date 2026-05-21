@@ -179,21 +179,32 @@ async def append_incoming_message(db, *, route: dict, wa_id: str, name: str, tex
 
     # ---- AI auto-reply path ---------------------------------------------
     ai_result = {"action": "skipped"}
+    logger.info(
+        "[AI] Attempting auto-reply | convo=%s wa_id=%s text=%r",
+        found["conversation_id"], wa_id, (text or "")[:120],
+    )
     try:
         ai_result = await ai_agent.handle_incoming(
             db,
             conversation_id=found["conversation_id"],
             incoming_text=text,
         )
+        logger.info(
+            "[AI] handle_incoming -> action=%s lang=%s handoff=%s has_reply=%s",
+            ai_result.get("action"), ai_result.get("lang"),
+            ai_result.get("handoff"), bool(ai_result.get("reply")),
+        )
         reply_text = ai_result.get("reply")
         if reply_text:
+            logger.info("[AI] Reply preview: %r", reply_text[:160])
             # 1) Send to the user via Meta
             try:
-                await whatsapp_meta.send_text_message(
+                meta_resp = await whatsapp_meta.send_text_message(
                     route["phone_number_id"], wa_id, reply_text
                 )
+                logger.info("[AI] Meta send OK: %s", str(meta_resp)[:200])
             except Exception as e:
-                logger.exception("AI: failed to send via Meta: %s", e)
+                logger.exception("[AI] failed to send via Meta: %s", e)
 
             # 2) Mirror as outgoing in Chatwoot so the human agent sees it
             try:
@@ -204,10 +215,18 @@ async def append_incoming_message(db, *, route: dict, wa_id: str, name: str, tex
                     content=reply_text,
                     incoming=False,
                 )
+                logger.info("[AI] Mirrored reply into Chatwoot")
             except Exception as e:
-                logger.exception("AI: failed to mirror to Chatwoot: %s", e)
+                logger.exception("[AI] failed to mirror to Chatwoot: %s", e)
+        else:
+            logger.warning(
+                "[AI] No reply text generated. action=%s — check ai_settings.enabled, "
+                "EMERGENT_LLM_KEY, and emergentintegrations install.",
+                ai_result.get("action"),
+            )
     except Exception as e:
-        logger.exception("AI handler failed: %s", e)
+        logger.exception("[AI] handler failed: %s", e)
+        ai_result = {"action": "error", "error": str(e)}
 
     return {
         "action": action,

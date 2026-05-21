@@ -216,21 +216,27 @@ async def generate_reply(
     handoff already, LLM error). lang is what we detected.
     """
     if not _LLM_AVAILABLE:
+        logger.warning("[AI] generate_reply skipped — emergentintegrations not importable")
         return None, "ar"
 
     api_key = (os.environ.get("EMERGENT_LLM_KEY") or "").strip()
     if not api_key:
-        logger.warning("EMERGENT_LLM_KEY not set — AI reply skipped")
+        logger.warning("[AI] EMERGENT_LLM_KEY not set — AI reply skipped")
         return None, "ar"
 
     settings = await get_settings(db)
     if not settings.get("enabled", True):
+        logger.info("[AI] disabled in ai_settings — skipping reply")
         return None, "ar"
 
     lang = detect_lang(text)
     knowledge_block = await _gather_knowledge(db, lang)
     system_prompt = _build_system_prompt(settings, knowledge_block, lang)
     model = settings.get("model") or "gpt-4o"
+    logger.info(
+        "[AI] generate_reply | model=%s lang=%s convo=%s kb_chars=%d text_chars=%d",
+        model, lang, conversation_id, len(knowledge_block or ""), len(text or ""),
+    )
 
     session_id = f"wa-{conversation_id}"
     try:
@@ -248,11 +254,12 @@ async def generate_reply(
                         pass
         response = await chat.send_message(UserMessage(text=text))
         reply = (response or "").strip()
+        logger.info("[AI] LLM responded | chars=%d preview=%r", len(reply), reply[:120])
         if not reply:
             reply = settings.get(f"fallback_message_{lang}") or ""
         return reply, lang
     except Exception as e:
-        logger.exception("AI generation failed: %s", e)
+        logger.exception("[AI] generation failed: %s", e)
         return None, lang
 
 
