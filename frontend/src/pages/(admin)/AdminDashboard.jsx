@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { useLang } from "@/contexts/LanguageContext";
 import { api, formatApiErrorDetail } from "@/contexts/AuthContext";
 import {
@@ -11,12 +12,17 @@ import {
   Loader2,
   ArrowUpRight,
   Activity,
+  ShieldCheck,
+  CheckCircle2,
+  XCircle,
 } from "lucide-react";
 
 export default function AdminDashboard() {
   const { lang } = useLang();
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
+  const [downgrading, setDowngrading] = useState(false);
+  const [downgradeResult, setDowngradeResult] = useState(null);
 
   useEffect(() => {
     (async () => {
@@ -39,6 +45,26 @@ export default function AdminDashboard() {
   }
 
   const fmt = (n) => n.toLocaleString(lang === "ar" ? "ar-EG" : "en-US");
+
+  const runDowngrade = async () => {
+    if (!window.confirm(
+      lang === "ar"
+        ? "سيتم تحويل كل العملاء الحاليين إلى دور 'موظف' داخل Chatwoot لمنعهم من إنشاء قنوات مباشرة. هل تريد المتابعة؟"
+        : "All existing clients will be demoted to 'agent' role inside Chatwoot, preventing them from creating channels directly. Continue?"
+    )) return;
+    setDowngrading(true);
+    setDowngradeResult(null);
+    try {
+      const { data } = await api.post("/admin/chatwoot/downgrade-clients-to-agent");
+      setDowngradeResult(data);
+    } catch (e) {
+      setDowngradeResult({
+        error: formatApiErrorDetail(e.response?.data?.detail) || e.message,
+      });
+    } finally {
+      setDowngrading(false);
+    }
+  };
 
   return (
     <div className="space-y-6" data-testid="admin-overview">
@@ -121,6 +147,72 @@ export default function AdminDashboard() {
               );
             })}
           </div>
+        </CardContent>
+      </Card>
+
+      {/* Maintenance — Chatwoot lockdown */}
+      <Card data-testid="chatwoot-lockdown-card" className="rounded-3xl border-stone-200">
+        <CardHeader>
+          <CardTitle className="text-base font-heading font-bold text-stone-900 flex items-center gap-2">
+            <ShieldCheck size={18} className="text-emerald-700" />
+            {lang === "ar" ? "قفل Chatwoot للعملاء" : "Chatwoot client lockdown"}
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-sm text-stone-600 leading-relaxed">
+            {lang === "ar"
+              ? "حوّل كل العملاء الحاليين من دور (Administrator) إلى دور (Agent) داخل Chatwoot — حتى لا يتمكنوا من إنشاء قنوات مباشرة من هناك. يُنفّذ مرة واحدة وآمن للتشغيل المتكرر."
+              : "Demote every existing client from administrator → agent inside Chatwoot, so they can never create channels there. Idempotent: safe to run multiple times."}
+          </p>
+          <Button
+            data-testid="chatwoot-downgrade-btn"
+            onClick={runDowngrade}
+            disabled={downgrading}
+            className="bg-emerald-800 hover:bg-emerald-900 text-white rounded-xl"
+          >
+            {downgrading ? (
+              <Loader2 className="animate-spin me-2" size={16} />
+            ) : (
+              <ShieldCheck className="me-2" size={16} />
+            )}
+            {lang === "ar" ? "تشغيل الترقية العكسية الآن" : "Run downgrade now"}
+          </Button>
+
+          {downgradeResult && (
+            <div
+              data-testid="downgrade-result"
+              className="rounded-xl border border-stone-200 bg-stone-50/60 p-4 space-y-2"
+            >
+              {downgradeResult.error ? (
+                <div className="text-sm text-red-700 flex items-center gap-2">
+                  <XCircle size={16} /> {downgradeResult.error}
+                </div>
+              ) : (
+                <>
+                  <div className="text-sm font-semibold text-stone-800">
+                    {lang === "ar"
+                      ? `إجمالي العملاء المعالَجين: ${downgradeResult.total}`
+                      : `Total clients processed: ${downgradeResult.total}`}
+                  </div>
+                  <ul className="text-xs space-y-1 max-h-60 overflow-auto">
+                    {(downgradeResult.results || []).map((r, i) => (
+                      <li key={i} className="flex items-center gap-2">
+                        {r.ok ? (
+                          <CheckCircle2 size={12} className="text-emerald-600 shrink-0" />
+                        ) : (
+                          <XCircle size={12} className="text-red-600 shrink-0" />
+                        )}
+                        <span className="text-stone-700 font-mono">{r.email}</span>
+                        {r.error && (
+                          <span className="text-red-600 truncate">— {r.error}</span>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>
