@@ -143,16 +143,37 @@ async def provision_for_user(user_doc: dict) -> dict:
 
 
 async def set_user_role(account_id: int, user_id: int, role: str = "agent") -> dict:
-    """Update an existing user's role inside an account (admin tool)."""
+    """Change an existing user's role inside an account.
+
+    Chatwoot's Platform API has no PATCH endpoint for `account_users` — instead
+    we DELETE the existing link and POST a new one with the desired role.
+    Both calls are idempotent on Chatwoot's side.
+    """
     async with httpx.AsyncClient(timeout=20.0) as client:
-        r = await client.patch(
+        # 1) Remove existing link (ignore 404 — user might not be linked yet)
+        del_resp = await client.request(
+            "DELETE",
+            f"{_base()}/platform/api/v1/accounts/{account_id}/account_users",
+            headers=_headers(),
+            json={"user_id": user_id},
+        )
+        if del_resp.status_code >= 400 and del_resp.status_code != 404:
+            # 422 typically means "not found" too — proceed anyway
+            logger.warning(
+                "set_user_role: unlink returned %s: %s", del_resp.status_code, del_resp.text[:200],
+            )
+
+        # 2) Recreate the link with the new role
+        add_resp = await client.post(
             f"{_base()}/platform/api/v1/accounts/{account_id}/account_users",
             headers=_headers(),
             json={"user_id": user_id, "role": role},
         )
-        if r.status_code >= 400:
-            raise ChatwootError(f"set_user_role {r.status_code}: {r.text}")
-        return r.json() if r.text else {"ok": True}
+        if add_resp.status_code >= 400:
+            raise ChatwootError(
+                f"set_user_role re-link {add_resp.status_code}: {add_resp.text[:300]}",
+            )
+        return add_resp.json() if add_resp.text else {"ok": True, "role": role}
 
 
 # ===========================================================
