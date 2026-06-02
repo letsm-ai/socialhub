@@ -85,6 +85,10 @@ async def ensure_route(db, *, user_doc: Dict[str, Any]) -> Dict[str, Any]:
     instance = evolution_client.instance_name_for_user(user_doc["id"])
     evo_webhook = f"{backend_public}/api/webhooks/evolution"
     create_resp = await evolution_client.create_instance(instance, webhook_url=evo_webhook)
+    logger.info(
+        "[Evolution create_instance] response keys: %s",
+        list((create_resp or {}).keys()),
+    )
 
     route = {
         "user_id": user_doc["id"],

@@ -10,7 +10,7 @@ import logging
 import uuid
 import asyncio
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from fastapi import FastAPI, APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import PlainTextResponse
@@ -1452,17 +1452,60 @@ async def me_whatsapp_qr_create(user: dict = Depends(_current_user)):
     except Exception as e:
         logger.exception("evolution ensure_route failed")
         raise HTTPException(status_code=502, detail=f"evolution_setup_failed: {e}")
-    # Pull a fresh QR (covers the "already exists" path)
+    # Pull a fresh QR (covers the "already exists" path). Evolution's response
+    # shape differs between versions/endpoints — extract from any known path.
+    raw: dict = {}
     try:
-        qr = await evolution_client.connect_instance(route["instance"])
+        raw = await evolution_client.connect_instance(route["instance"])
     except Exception as e:
         logger.exception("evolution connect failed")
         raise HTTPException(status_code=502, detail=f"evolution_qr_failed: {e}")
+
+    qr_b64 = _extract_qr_base64(raw)
+    qr_code = _extract_qr_code(raw)
+    logger.info(
+        "[QR] user=%s instance=%s has_b64=%s has_code=%s raw_keys=%s",
+        user.get("id"), route["instance"], bool(qr_b64), bool(qr_code),
+        list((raw or {}).keys()),
+    )
     return {
         "instance": route["instance"],
         "state": route.get("state"),
-        "qr": qr.get("base64") or qr.get("code") or qr.get("qrcode") or qr,
+        "qr_base64": qr_b64,
+        "qr_code": qr_code,
+        "qr": qr_b64 or qr_code,  # legacy field for old clients
+        "raw_keys": list((raw or {}).keys()),  # debug
     }
+
+
+def _extract_qr_base64(raw: Any) -> Optional[str]:
+    """Walk known paths in Evolution's varied responses to find a base64 PNG."""
+    if not raw:
+        return None
+    candidates = [
+        raw.get("base64") if isinstance(raw, dict) else None,
+        (raw.get("qrcode") or {}).get("base64") if isinstance(raw, dict) else None,
+        (raw.get("qr") or {}).get("base64") if isinstance(raw, dict) else None,
+    ]
+    for c in candidates:
+        if isinstance(c, str) and c.strip():
+            return c
+    return None
+
+
+def _extract_qr_code(raw: Any) -> Optional[str]:
+    """Raw `2@...` string (we can render with qrcode lib client-side)."""
+    if not raw:
+        return None
+    candidates = [
+        raw.get("code") if isinstance(raw, dict) else None,
+        (raw.get("qrcode") or {}).get("code") if isinstance(raw, dict) else None,
+        (raw.get("qr") or {}).get("code") if isinstance(raw, dict) else None,
+    ]
+    for c in candidates:
+        if isinstance(c, str) and c.strip():
+            return c
+    return None
 
 
 @api_router.get("/me/channels/whatsapp/qr/status")

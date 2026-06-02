@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { QRCodeSVG } from "qrcode.react";
 import { useLang } from "@/contexts/LanguageContext";
 import { api, formatApiErrorDetail } from "@/contexts/AuthContext";
 import {
@@ -49,7 +50,8 @@ export default function Channels() {
   const [mockMode, setMockMode] = useState(true);
   const [qrEnabled, setQrEnabled] = useState(false);
   const [qrModalOpen, setQrModalOpen] = useState(false);
-  const [qrImage, setQrImage] = useState("");
+  const [qrImage, setQrImage] = useState("");      // base64 image (preferred)
+  const [qrCode, setQrCode] = useState("");        // raw "2@..." string (fallback)
   const [qrLoading, setQrLoading] = useState(false);
   const [qrState, setQrState] = useState({ linked: false, state: "not_linked", wa_number: null });
 
@@ -163,26 +165,28 @@ export default function Channels() {
     setQrModalOpen(true);
     setQrLoading(true);
     setQrImage("");
+    setQrCode("");
+    await fetchQr();
+    setQrLoading(false);
+  };
+
+  const fetchQr = async () => {
     try {
       const { data } = await api.post("/me/channels/whatsapp/qr/create");
-      // Evolution returns either base64 (full data URL) or a code string
-      let img = data.qr;
-      if (img && typeof img === "object") {
-        img = img.base64 || img.code || "";
-      }
+      // Prefer base64 image; fall back to raw code we render ourselves
+      let img = data.qr_base64 || (data.qr && typeof data.qr === "string" && data.qr.startsWith("data:") ? data.qr : "");
       if (img && !String(img).startsWith("data:")) {
         img = `data:image/png;base64,${img}`;
       }
+      const code = data.qr_code || (data.qr && typeof data.qr === "string" && !data.qr.startsWith("data:") ? data.qr : "");
       setQrImage(img || "");
+      setQrCode(code || "");
     } catch (e) {
       setError(formatApiErrorDetail(e.response?.data?.detail) || e.message);
-      setQrModalOpen(false);
-    } finally {
-      setQrLoading(false);
     }
   };
 
-  // Poll QR status while modal is open
+  // Poll QR status + auto-refresh QR if not yet generated
   useEffect(() => {
     if (!qrModalOpen) return undefined;
     const interval = setInterval(async () => {
@@ -197,25 +201,23 @@ export default function Channels() {
               : `🎉 WhatsApp connected! Number: ${data.wa_number || ""}`
           );
           setTimeout(() => setToast(""), 6000);
+          return;
+        }
+        // If still no QR after first fetch, re-call create to get one
+        if (!qrImage && !qrCode) {
+          await fetchQr();
         }
       } catch (_) { /* ignore */ }
     }, 3000);
     return () => clearInterval(interval);
-  }, [qrModalOpen, lang]);
+  }, [qrModalOpen, lang, qrImage, qrCode]);
 
   const refreshQr = async () => {
     setQrLoading(true);
-    try {
-      const { data } = await api.post("/me/channels/whatsapp/qr/create");
-      let img = data.qr;
-      if (img && typeof img === "object") img = img.base64 || img.code || "";
-      if (img && !String(img).startsWith("data:")) img = `data:image/png;base64,${img}`;
-      setQrImage(img || "");
-    } catch (e) {
-      setError(formatApiErrorDetail(e.response?.data?.detail) || e.message);
-    } finally {
-      setQrLoading(false);
-    }
+    setQrImage("");
+    setQrCode("");
+    await fetchQr();
+    setQrLoading(false);
   };
 
   const disconnectQr = async () => {
@@ -299,6 +301,7 @@ export default function Channels() {
       {qrModalOpen && (
         <QrModal
           qrImage={qrImage}
+          qrCode={qrCode}
           loading={qrLoading}
           onClose={() => setQrModalOpen(false)}
           onRefresh={refreshQr}
@@ -770,7 +773,7 @@ const WhatsAppLiteConnectedCard = ({ state, onDisconnect, lang }) => (
 /* ------------------------------------------------------------------ */
 /* QR modal                                                            */
 /* ------------------------------------------------------------------ */
-const QrModal = ({ qrImage, loading, onClose, onRefresh, lang }) => (
+const QrModal = ({ qrImage, qrCode, loading, onClose, onRefresh, lang }) => (
   <div
     data-testid="qr-modal"
     className="fixed inset-0 z-50 bg-stone-900/70 backdrop-blur-sm flex items-center justify-center p-4"
@@ -800,17 +803,25 @@ const QrModal = ({ qrImage, loading, onClose, onRefresh, lang }) => (
       </div>
 
       <div className="bg-stone-50 rounded-2xl border border-stone-200 p-5 flex items-center justify-center min-h-[260px]">
-        {loading || !qrImage ? (
+        {loading || (!qrImage && !qrCode) ? (
           <div className="flex flex-col items-center gap-3 text-stone-500">
             <Loader2 size={28} className="animate-spin" />
             <span className="text-xs">{lang === "ar" ? "جاري توليد الكود..." : "Generating code..."}</span>
           </div>
-        ) : (
+        ) : qrImage ? (
           <img
             data-testid="qr-image"
             src={qrImage}
             alt="WhatsApp QR"
             className="w-56 h-56 object-contain"
+          />
+        ) : (
+          <QRCodeSVG
+            data-testid="qr-image"
+            value={qrCode}
+            size={224}
+            level="M"
+            includeMargin={false}
           />
         )}
       </div>
