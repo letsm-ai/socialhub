@@ -1440,6 +1440,28 @@ async def me_whatsapp_qr_config(user: dict = Depends(_current_user)):
     return {"enabled": evolution_client.is_configured()}
 
 
+@api_router.get("/me/channels/whatsapp/qr/debug")
+async def me_whatsapp_qr_debug(user: dict = Depends(_current_user)):
+    """Diagnostic: returns the raw Evolution responses so we can see what shape
+    the QR is in. Safe to expose — only returns the user's own instance state."""
+    if not evolution_client.is_configured():
+        raise HTTPException(status_code=400, detail="evolution_not_configured")
+    route = await evolution_routing.get_route(db, user_id=user["id"])
+    if not route:
+        return {"error": "no_route", "hint": "call POST /qr/create first"}
+    instance = route["instance"]
+    out: dict = {"instance": instance, "stored_state": route.get("state")}
+    try:
+        out["connection_state_raw"] = await evolution_client.get_connection_state(instance)
+    except Exception as e:
+        out["connection_state_error"] = str(e)[:300]
+    try:
+        out["connect_raw"] = await evolution_client.connect_instance(instance)
+    except Exception as e:
+        out["connect_error"] = str(e)[:300]
+    return out
+
+
 @api_router.post("/me/channels/whatsapp/qr/create")
 async def me_whatsapp_qr_create(user: dict = Depends(_current_user)):
     """Creates (or reuses) the user's Evolution instance and returns the QR
