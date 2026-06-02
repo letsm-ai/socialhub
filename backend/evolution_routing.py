@@ -36,15 +36,21 @@ async def get_route_by_instance(db, instance: str) -> Optional[Dict[str, Any]]:
 
 async def ensure_route(db, *, user_doc: Dict[str, Any]) -> Dict[str, Any]:
     """Idempotently creates a Chatwoot API inbox + Evolution instance for the
-    given user. Returns the route doc."""
+    given user. Returns the route doc.
+
+    Since SocialHub clients run as Chatwoot `agent` (locked-down role), they
+    can't create inboxes directly. We momentarily promote them to
+    administrator for the inbox-creation call, then demote back to agent.
+    """
     existing = await get_route(db, user_id=user_doc["id"])
     if existing:
         return existing
 
     account_id = user_doc.get("chatwoot_account_id")
     user_token = user_doc.get("chatwoot_access_token")
-    if not account_id or not user_token:
-        raise RuntimeError("user is missing chatwoot_account_id / chatwoot_access_token")
+    cw_user_id = user_doc.get("chatwoot_user_id")
+    if not account_id or not user_token or not cw_user_id:
+        raise RuntimeError("user is missing chatwoot_account_id / token / user_id")
 
     backend_public = (
         os.environ.get("BACKEND_PUBLIC_URL")
@@ -54,11 +60,26 @@ async def ensure_route(db, *, user_doc: Dict[str, Any]) -> Dict[str, Any]:
     if not backend_public:
         raise RuntimeError("BACKEND_PUBLIC_URL / FRONTEND_URL not configured")
 
-    # 1) Chatwoot API inbox for QR-routed messages
-    inbox_name = "WhatsApp (Lite / QR)"
-    cw_webhook = f"{backend_public}/api/webhooks/chatwoot"
-    inbox = await create_api_inbox(account_id, user_token, name=inbox_name, webhook_url=cw_webhook)
-    inbox_id = inbox.get("id")
+    # 1) Briefly promote to administrator so we can create an inbox under
+    #    their Chatwoot account, then demote back to agent immediately.
+    from chatwoot_client import set_user_role  # local import to avoid cycles
+    try:
+        await set_user_role(account_id, cw_user_id, role="administrator")
+    except Exception as e:
+        logger.warning("Could not promote user to admin temporarily: %s", e)
+    try:
+        inbox_name = "WhatsApp (Lite / QR)"
+        cw_webhook = f"{backend_public}/api/webhooks/chatwoot"
+        inbox = await create_api_inbox(account_id, user_token, name=inbox_name, webhook_url=cw_webhook)
+        inbox_id = inbox.get("id")
+    finally:
+        try:
+            await set_user_role(account_id, cw_user_id, role="agent")
+        except Exception as e:
+            logger.error(
+                "CRITICAL: failed to demote user %s back to agent: %s — manual fix required",
+                cw_user_id, e,
+            )
 
     # 2) Evolution instance + register webhook back to us
     instance = evolution_client.instance_name_for_user(user_doc["id"])
