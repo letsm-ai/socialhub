@@ -24,6 +24,10 @@ import {
   X,
   Info,
   Send,
+  QrCode,
+  AlertTriangle,
+  RefreshCw,
+  Unlink,
 } from "lucide-react";
 
 const PROVIDER_META = {
@@ -43,9 +47,16 @@ export default function Channels() {
   const [toast, setToast] = useState("");
   const [fbReady, setFbReady] = useState(false);
   const [mockMode, setMockMode] = useState(true);
+  const [qrEnabled, setQrEnabled] = useState(false);
+  const [qrModalOpen, setQrModalOpen] = useState(false);
+  const [qrImage, setQrImage] = useState("");
+  const [qrLoading, setQrLoading] = useState(false);
+  const [qrState, setQrState] = useState({ linked: false, state: "not_linked", wa_number: null });
 
   useEffect(() => {
     isFacebookConfigured().then((b) => setMockMode(!b)).catch(() => setMockMode(true));
+    api.get("/me/channels/whatsapp/qr/config").then(({ data }) => setQrEnabled(!!data.enabled)).catch(() => {});
+    api.get("/me/channels/whatsapp/qr/status").then(({ data }) => setQrState(data)).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -147,6 +158,82 @@ export default function Channels() {
     }
   };
 
+  const openQrModal = async () => {
+    setError("");
+    setQrModalOpen(true);
+    setQrLoading(true);
+    setQrImage("");
+    try {
+      const { data } = await api.post("/me/channels/whatsapp/qr/create");
+      // Evolution returns either base64 (full data URL) or a code string
+      let img = data.qr;
+      if (img && typeof img === "object") {
+        img = img.base64 || img.code || "";
+      }
+      if (img && !String(img).startsWith("data:")) {
+        img = `data:image/png;base64,${img}`;
+      }
+      setQrImage(img || "");
+    } catch (e) {
+      setError(formatApiErrorDetail(e.response?.data?.detail) || e.message);
+      setQrModalOpen(false);
+    } finally {
+      setQrLoading(false);
+    }
+  };
+
+  // Poll QR status while modal is open
+  useEffect(() => {
+    if (!qrModalOpen) return undefined;
+    const interval = setInterval(async () => {
+      try {
+        const { data } = await api.get("/me/channels/whatsapp/qr/status");
+        setQrState(data);
+        if (data.linked) {
+          setQrModalOpen(false);
+          setToast(
+            lang === "ar"
+              ? `🎉 تم ربط واتساب بنجاح! الرقم: ${data.wa_number || ""}`
+              : `🎉 WhatsApp connected! Number: ${data.wa_number || ""}`
+          );
+          setTimeout(() => setToast(""), 6000);
+        }
+      } catch (_) { /* ignore */ }
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [qrModalOpen, lang]);
+
+  const refreshQr = async () => {
+    setQrLoading(true);
+    try {
+      const { data } = await api.post("/me/channels/whatsapp/qr/create");
+      let img = data.qr;
+      if (img && typeof img === "object") img = img.base64 || img.code || "";
+      if (img && !String(img).startsWith("data:")) img = `data:image/png;base64,${img}`;
+      setQrImage(img || "");
+    } catch (e) {
+      setError(formatApiErrorDetail(e.response?.data?.detail) || e.message);
+    } finally {
+      setQrLoading(false);
+    }
+  };
+
+  const disconnectQr = async () => {
+    if (!window.confirm(
+      lang === "ar"
+        ? "سيتم فصل واتساب (QR) وحذف الجلسة. هل تريد المتابعة؟"
+        : "WhatsApp (QR) will be disconnected and the session deleted. Continue?"
+    )) return;
+    try {
+      await api.delete("/me/channels/whatsapp/qr");
+      setQrState({ linked: false, state: "not_linked", wa_number: null });
+      setToast(lang === "ar" ? "تم فصل واتساب (QR)." : "WhatsApp (QR) disconnected.");
+      setTimeout(() => setToast(""), 3000);
+    } catch (e) {
+      setError(formatApiErrorDetail(e.response?.data?.detail) || e.message);
+    }
+  };
+
   return (
     <div className="space-y-6" data-testid="channels-page">
       <div>
@@ -187,6 +274,34 @@ export default function Channels() {
           channel={whatsapp}
           onDisconnect={disconnectWhatsApp}
           onSimulate={simulateMessage}
+          lang={lang}
+        />
+      )}
+
+      {/* WhatsApp Lite (QR) — alternative for clients without Meta dev account */}
+      {qrEnabled && (
+        qrState.linked ? (
+          <WhatsAppLiteConnectedCard
+            state={qrState}
+            onDisconnect={disconnectQr}
+            lang={lang}
+          />
+        ) : (
+          <WhatsAppLiteConnectCard
+            onConnect={openQrModal}
+            loading={qrLoading && qrModalOpen}
+            lang={lang}
+          />
+        )
+      )}
+
+      {/* QR scan modal */}
+      {qrModalOpen && (
+        <QrModal
+          qrImage={qrImage}
+          loading={qrLoading}
+          onClose={() => setQrModalOpen(false)}
+          onRefresh={refreshQr}
           lang={lang}
         />
       )}
@@ -533,6 +648,189 @@ const DataField = ({ label, value, testId, mono = false }) => (
       }`}
     >
       {value}
+    </div>
+  </div>
+);
+
+
+/* ------------------------------------------------------------------ */
+/* WhatsApp Lite (QR) — NOT yet connected                              */
+/* ------------------------------------------------------------------ */
+const WhatsAppLiteConnectCard = ({ onConnect, loading, lang }) => (
+  <Card
+    data-testid="whatsapp-lite-connect-card"
+    className="rounded-3xl border-amber-200 bg-amber-50/40"
+  >
+    <CardContent className="p-7 md:p-8 space-y-5">
+      <div className="flex items-start gap-4">
+        <div className="w-14 h-14 rounded-2xl bg-amber-100 border border-amber-200 flex items-center justify-center flex-shrink-0">
+          <QrCode size={28} className="text-amber-700" />
+        </div>
+        <div className="flex-1">
+          <div className="flex flex-wrap items-center gap-2 mb-1">
+            <h2 className="font-heading text-xl md:text-2xl font-bold text-stone-900">
+              {lang === "ar" ? "ربط واتساب بـ QR (Lite)" : "WhatsApp Lite — QR Connect"}
+            </h2>
+            <Badge variant="outline" className="text-[10px] border-amber-300 bg-amber-100 text-amber-900">
+              {lang === "ar" ? "للباقات الأقل" : "Starter plan"}
+            </Badge>
+          </div>
+          <p className="text-stone-700 text-sm leading-relaxed">
+            {lang === "ar"
+              ? "ربط فوري عبر مسح كود QR — يعمل بنفس رقمك على واتساب الشخصي/البزنس. مناسب للتجربة وللعملاء بدون حساب مطوّر Meta."
+              : "Instant link by scanning a QR code — works with your existing personal/business WhatsApp number. Great for evaluation and clients without a Meta developer account."}
+          </p>
+        </div>
+      </div>
+
+      <div className="rounded-2xl bg-amber-100/70 border border-amber-200 p-4 flex items-start gap-3">
+        <AlertTriangle size={18} className="text-amber-700 flex-shrink-0 mt-0.5" />
+        <div className="text-xs text-amber-900 leading-relaxed space-y-1">
+          <p className="font-semibold">
+            {lang === "ar" ? "تنبيهات قبل المتابعة:" : "Heads-up before you proceed:"}
+          </p>
+          <ul className="list-disc ms-5 space-y-0.5">
+            <li>
+              {lang === "ar"
+                ? "ليس رسمياً من Meta — قد تحظر واتساب الرقم بدون إشعار."
+                : "Not officially supported by Meta — the number can be banned without notice."}
+            </li>
+            <li>
+              {lang === "ar"
+                ? "لا يدعم الحملات الترويجية بالقوالب (Broadcasts)."
+                : "Does not support template broadcasts."}
+            </li>
+            <li>
+              {lang === "ar"
+                ? "لا يمنحك العلامة الخضراء الموثّقة."
+                : "Cannot earn the verified green badge."}
+            </li>
+            <li>
+              {lang === "ar"
+                ? "تستهلك إحدى خانات «الأجهزة المرتبطة» في واتساب."
+                : "Uses one of your WhatsApp Linked Devices slots."}
+            </li>
+          </ul>
+        </div>
+      </div>
+
+      <Button
+        data-testid="connect-whatsapp-qr-btn"
+        onClick={onConnect}
+        disabled={loading}
+        className="bg-stone-900 hover:bg-stone-800 text-white rounded-xl h-12 px-6"
+      >
+        {loading ? (
+          <Loader2 className="animate-spin me-2" size={16} />
+        ) : (
+          <QrCode className="me-2" size={16} />
+        )}
+        {lang === "ar" ? "ابدأ الربط بمسح QR" : "Start QR linking"}
+      </Button>
+    </CardContent>
+  </Card>
+);
+
+/* ------------------------------------------------------------------ */
+/* WhatsApp Lite (QR) — CONNECTED                                      */
+/* ------------------------------------------------------------------ */
+const WhatsAppLiteConnectedCard = ({ state, onDisconnect, lang }) => (
+  <Card data-testid="whatsapp-lite-connected-card" className="rounded-3xl border-stone-200 bg-white">
+    <CardContent className="p-6 flex flex-col md:flex-row md:items-center gap-4">
+      <div className="w-14 h-14 rounded-2xl bg-emerald-50 border border-emerald-200 flex items-center justify-center flex-shrink-0">
+        <QrCode size={26} className="text-emerald-700" />
+      </div>
+      <div className="flex-1">
+        <div className="flex items-center gap-2 mb-1">
+          <p className="font-semibold text-stone-900">
+            {lang === "ar" ? "واتساب Lite (QR) — متصل" : "WhatsApp Lite (QR) — Connected"}
+          </p>
+          <Badge className="bg-emerald-700 text-white hover:bg-emerald-700 text-[10px]">
+            {lang === "ar" ? "نشط" : "ACTIVE"}
+          </Badge>
+        </div>
+        <p className="text-stone-500 text-xs">
+          {lang === "ar" ? "الرقم:" : "Number:"}{" "}
+          <code className="font-mono text-stone-800">+{state.wa_number || "—"}</code>
+        </p>
+      </div>
+      <Button
+        data-testid="disconnect-whatsapp-qr-btn"
+        onClick={onDisconnect}
+        variant="outline"
+        className="rounded-xl border-red-200 text-red-700 hover:bg-red-50"
+      >
+        <Unlink size={14} className="me-2" />
+        {lang === "ar" ? "فصل" : "Disconnect"}
+      </Button>
+    </CardContent>
+  </Card>
+);
+
+/* ------------------------------------------------------------------ */
+/* QR modal                                                            */
+/* ------------------------------------------------------------------ */
+const QrModal = ({ qrImage, loading, onClose, onRefresh, lang }) => (
+  <div
+    data-testid="qr-modal"
+    className="fixed inset-0 z-50 bg-stone-900/70 backdrop-blur-sm flex items-center justify-center p-4"
+    onClick={onClose}
+  >
+    <div
+      className="bg-white rounded-3xl max-w-md w-full p-7 space-y-5 relative"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <button
+        onClick={onClose}
+        data-testid="qr-modal-close"
+        className="absolute top-4 end-4 w-8 h-8 rounded-full hover:bg-stone-100 flex items-center justify-center"
+      >
+        <X size={18} />
+      </button>
+
+      <div>
+        <h3 className="font-heading text-xl font-bold text-stone-900 mb-1">
+          {lang === "ar" ? "امسح كود QR" : "Scan the QR code"}
+        </h3>
+        <p className="text-sm text-stone-600">
+          {lang === "ar"
+            ? "افتح واتساب → الإعدادات → الأجهزة المرتبطة → ربط جهاز → امسح هذا الكود."
+            : "WhatsApp → Settings → Linked devices → Link a device → scan this code."}
+        </p>
+      </div>
+
+      <div className="bg-stone-50 rounded-2xl border border-stone-200 p-5 flex items-center justify-center min-h-[260px]">
+        {loading || !qrImage ? (
+          <div className="flex flex-col items-center gap-3 text-stone-500">
+            <Loader2 size={28} className="animate-spin" />
+            <span className="text-xs">{lang === "ar" ? "جاري توليد الكود..." : "Generating code..."}</span>
+          </div>
+        ) : (
+          <img
+            data-testid="qr-image"
+            src={qrImage}
+            alt="WhatsApp QR"
+            className="w-56 h-56 object-contain"
+          />
+        )}
+      </div>
+
+      <div className="flex items-center justify-between gap-3">
+        <Button
+          data-testid="qr-refresh-btn"
+          onClick={onRefresh}
+          variant="outline"
+          size="sm"
+          disabled={loading}
+          className="rounded-xl"
+        >
+          <RefreshCw size={14} className={`me-2 ${loading ? "animate-spin" : ""}`} />
+          {lang === "ar" ? "كود جديد" : "New code"}
+        </Button>
+        <p className="text-[11px] text-stone-500">
+          {lang === "ar" ? "بانتظار المسح..." : "Waiting for scan..."}
+        </p>
+      </div>
     </div>
   </div>
 );

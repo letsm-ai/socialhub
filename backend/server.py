@@ -31,6 +31,8 @@ import ai_agent
 import broadcasts as broadcasts_mod
 import chatwoot_client
 import email_service
+import evolution_client
+import evolution_routing
 import whatsapp_meta
 import whatsapp_routing
 import thawani  # noqa: F401  -- gated by env
@@ -1289,7 +1291,18 @@ async def chatwoot_webhook(request: Request):
 
     contact_map = await db.whatsapp_contacts.find_one({"conversation_id": conversation_id}, {"_id": 0})
     if not contact_map:
-        # Either it's not a WhatsApp conversation, or we haven't tracked it
+        # Try Evolution (QR) route before giving up
+        evo_result = await evolution_routing.send_via_chatwoot_outgoing(
+            db, conversation_id=conversation_id, content=content,
+        )
+        if evo_result.get("sent"):
+            logger.info(
+                "Evolution outgoing sent: convo=%s result=%s",
+                conversation_id, str(evo_result)[:200],
+            )
+            return {"sent": True, "via": "evolution", **evo_result}
+        if evo_result.get("reason") != "not_evolution_route":
+            logger.warning("Evolution send failed: %s", evo_result)
         return {"ignored": True, "reason": "no_whatsapp_contact_for_conversation"}
 
     wa_id = contact_map["wa_id"]
@@ -1398,6 +1411,107 @@ async def admin_delete_whatsapp_route(user: dict = Depends(_current_admin)):
         "deleted": result.deleted_count,
         "cache_cleared": cache_cleared.deleted_count,
     }
+
+
+# ============================
+# WhatsApp Lite (Evolution / QR) — per-user
+# ============================
+async def _resolve_user_for_whatsapp(user: dict) -> dict:
+    """Ensure the user has a Chatwoot account (provision if missing) and return
+    the fresh user doc."""
+    fresh = await db.users.find_one({"id": user["id"]}, {"_id": 0})
+    if not fresh:
+        raise HTTPException(status_code=404, detail="user_not_found")
+    if not fresh.get("chatwoot_account_id") or not fresh.get("chatwoot_access_token"):
+        try:
+            await _provision_chatwoot_async(user["id"])
+            fresh = await db.users.find_one({"id": user["id"]}, {"_id": 0})
+        except Exception as e:
+            logger.exception("auto-provision failed")
+            raise HTTPException(status_code=500, detail=f"chatwoot_provision_failed: {e}")
+    if not fresh or not fresh.get("chatwoot_account_id"):
+        raise HTTPException(status_code=500, detail="chatwoot_not_provisioned")
+    return fresh
+
+
+@api_router.get("/me/channels/whatsapp/qr/config")
+async def me_whatsapp_qr_config(user: dict = Depends(_current_user)):
+    """Whether QR-based linking is available on this deployment."""
+    return {"enabled": evolution_client.is_configured()}
+
+
+@api_router.post("/me/channels/whatsapp/qr/create")
+async def me_whatsapp_qr_create(user: dict = Depends(_current_user)):
+    """Creates (or reuses) the user's Evolution instance and returns the QR
+    image they need to scan with their WhatsApp app."""
+    if not evolution_client.is_configured():
+        raise HTTPException(status_code=400, detail="evolution_not_configured")
+    fresh = await _resolve_user_for_whatsapp(user)
+    try:
+        route = await evolution_routing.ensure_route(db, user_doc=fresh)
+    except Exception as e:
+        logger.exception("evolution ensure_route failed")
+        raise HTTPException(status_code=502, detail=f"evolution_setup_failed: {e}")
+    # Pull a fresh QR (covers the "already exists" path)
+    try:
+        qr = await evolution_client.connect_instance(route["instance"])
+    except Exception as e:
+        logger.exception("evolution connect failed")
+        raise HTTPException(status_code=502, detail=f"evolution_qr_failed: {e}")
+    return {
+        "instance": route["instance"],
+        "state": route.get("state"),
+        "qr": qr.get("base64") or qr.get("code") or qr.get("qrcode") or qr,
+    }
+
+
+@api_router.get("/me/channels/whatsapp/qr/status")
+async def me_whatsapp_qr_status(user: dict = Depends(_current_user)):
+    route = await evolution_routing.get_route(db, user_id=user["id"])
+    if not route:
+        return {"linked": False, "state": "not_linked"}
+    try:
+        live = await evolution_client.get_connection_state(route["instance"])
+        state = ((live.get("instance") or {}).get("state")) or route.get("state")
+    except Exception as e:
+        logger.warning("evolution status failed: %s", e)
+        state = route.get("state")
+    return {
+        "linked": state == "open",
+        "state": state,
+        "instance": route["instance"],
+        "wa_number": route.get("wa_number"),
+    }
+
+
+@api_router.delete("/me/channels/whatsapp/qr")
+async def me_whatsapp_qr_delete(user: dict = Depends(_current_user)):
+    """Disconnects and deletes the Evolution instance for this user."""
+    result = await evolution_routing.delete_route(db, user_id=user["id"])
+    return result
+
+
+@api_router.post("/webhooks/evolution")
+async def evolution_webhook(request: Request):
+    """Receives all events from Evolution API (messages, connection state, QR
+    updates) and routes them appropriately."""
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    try:
+        result = await evolution_routing.handle_evolution_webhook(db, payload)
+    except Exception as e:
+        logger.exception("evolution webhook failed: %s", e)
+        result = {"error": str(e)[:200]}
+    await db.evolution_events.insert_one({
+        "id": str(uuid.uuid4()),
+        "received_at": datetime.now(timezone.utc).isoformat(),
+        "event": payload.get("event"),
+        "instance": payload.get("instance") or payload.get("instanceName"),
+        "result": result,
+    })
+    return {"received": True, "result": result}
 
 
 # ============================
