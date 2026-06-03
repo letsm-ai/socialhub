@@ -94,6 +94,16 @@ async def connect_instance(instance: str) -> Dict[str, Any]:
         return r.json()
 
 
+async def restart_instance(instance: str) -> Dict[str, Any]:
+    """POST /instance/restart/{instance} — force-restarts an instance that got
+    stuck in 'connecting' state without producing a fresh QR."""
+    async with httpx.AsyncClient(timeout=20.0) as cx:
+        r = await cx.post(f"{_base()}/instance/restart/{instance}", headers=_headers())
+        if r.status_code >= 400 and r.status_code != 404:
+            raise EvolutionError(f"restart_instance {r.status_code}: {r.text[:300]}")
+        return r.json() if r.text else {"ok": True}
+
+
 async def get_connection_state(instance: str) -> Dict[str, Any]:
     """GET /instance/connectionState/{instance} — returns {state: 'open'|'close'|'connecting'}."""
     async with httpx.AsyncClient(timeout=15.0) as cx:

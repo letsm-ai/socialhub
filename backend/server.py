@@ -1474,24 +1474,44 @@ async def me_whatsapp_qr_create(user: dict = Depends(_current_user)):
     except Exception as e:
         logger.exception("evolution ensure_route failed")
         raise HTTPException(status_code=502, detail=f"evolution_setup_failed: {e}")
-    # Pull a fresh QR (covers the "already exists" path). Evolution's response
-    # shape differs between versions/endpoints — extract from any known path.
-    raw: dict = {}
-    try:
-        raw = await evolution_client.connect_instance(route["instance"])
-    except Exception as e:
-        logger.exception("evolution connect failed")
-        raise HTTPException(status_code=502, detail=f"evolution_qr_failed: {e}")
+    instance = route["instance"]
 
+    # Pull a fresh QR. If Evolution is stuck in `connecting` without producing
+    # a QR (count: 0 / no base64 / no code), restart the instance and retry.
+    async def _fetch_qr() -> dict:
+        try:
+            return await evolution_client.connect_instance(instance)
+        except Exception as e:
+            logger.exception("evolution connect failed")
+            raise HTTPException(status_code=502, detail=f"evolution_qr_failed: {e}")
+
+    raw = await _fetch_qr()
     qr_b64 = _extract_qr_base64(raw)
     qr_code = _extract_qr_code(raw)
+
+    if not qr_b64 and not qr_code:
+        logger.info(
+            "[QR] no QR in initial response (raw=%s) — restarting instance %s",
+            str(raw)[:200], instance,
+        )
+        try:
+            await evolution_client.restart_instance(instance)
+        except Exception as e:
+            logger.warning("[QR] restart failed (non-fatal): %s", e)
+        # Wait a moment for Evolution to generate the new QR
+        import asyncio as _aio
+        await _aio.sleep(1.5)
+        raw = await _fetch_qr()
+        qr_b64 = _extract_qr_base64(raw)
+        qr_code = _extract_qr_code(raw)
+
     logger.info(
         "[QR] user=%s instance=%s has_b64=%s has_code=%s raw_keys=%s",
-        user.get("id"), route["instance"], bool(qr_b64), bool(qr_code),
+        user.get("id"), instance, bool(qr_b64), bool(qr_code),
         list((raw or {}).keys()),
     )
     return {
-        "instance": route["instance"],
+        "instance": instance,
         "state": route.get("state"),
         "qr_base64": qr_b64,
         "qr_code": qr_code,
