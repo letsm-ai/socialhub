@@ -25,6 +25,11 @@ class EvolutionError(RuntimeError):
     pass
 
 
+class EvolutionInstanceNotFound(EvolutionError):
+    """Raised when Evolution reports the instance doesn't exist."""
+    pass
+
+
 def _base() -> str:
     url = (os.environ.get("EVOLUTION_API_URL") or "").strip().rstrip("/")
     if not url:
@@ -89,6 +94,10 @@ async def connect_instance(instance: str) -> Dict[str, Any]:
     """GET /instance/connect/{instance} — returns the current QR or connection state."""
     async with httpx.AsyncClient(timeout=20.0) as cx:
         r = await cx.get(f"{_base()}/instance/connect/{instance}", headers=_headers())
+        if r.status_code == 404 or (r.status_code >= 400 and "does not exist" in r.text.lower()):
+            raise EvolutionInstanceNotFound(
+                f"connect_instance {r.status_code}: {r.text[:200]}"
+            )
         if r.status_code >= 400:
             raise EvolutionError(f"connect_instance {r.status_code}: {r.text[:300]}")
         return r.json()

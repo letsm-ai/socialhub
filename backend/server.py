@@ -1476,16 +1476,40 @@ async def me_whatsapp_qr_create(user: dict = Depends(_current_user)):
         raise HTTPException(status_code=502, detail=f"evolution_setup_failed: {e}")
     instance = route["instance"]
 
-    # Pull a fresh QR. If Evolution is stuck in `connecting` without producing
-    # a QR (count: 0 / no base64 / no code), restart the instance and retry.
+    # Pull a fresh QR. If Evolution returns "instance does not exist" (404),
+    # we have a stale row pointing at a deleted instance — purge it and
+    # auto-recreate, then retry one time.
     async def _fetch_qr() -> dict:
         try:
             return await evolution_client.connect_instance(instance)
+        except evolution_client.EvolutionInstanceNotFound:
+            raise  # bubble up so the caller can heal
         except Exception as e:
             logger.exception("evolution connect failed")
             raise HTTPException(status_code=502, detail=f"evolution_qr_failed: {e}")
 
-    raw = await _fetch_qr()
+    try:
+        raw = await _fetch_qr()
+    except evolution_client.EvolutionInstanceNotFound:
+        logger.warning(
+            "[QR] stale route for instance %s — Evolution returned 404. Purging route and recreating.",
+            instance,
+        )
+        await db.evolution_routes.delete_one({"user_id": fresh["id"]})
+        await db.evolution_contacts.delete_many({"instance": instance})
+        # Re-create the route (this also creates a brand-new Evolution instance)
+        try:
+            route = await evolution_routing.ensure_route(db, user_doc=fresh)
+        except Exception as e:
+            logger.exception("evolution recreate-after-stale failed")
+            raise HTTPException(status_code=502, detail=f"evolution_setup_failed: {e}")
+        instance = route["instance"]
+        try:
+            raw = await evolution_client.connect_instance(instance)
+        except Exception as e:
+            logger.exception("evolution connect (post-heal) failed")
+            raise HTTPException(status_code=502, detail=f"evolution_qr_failed: {e}")
+
     qr_b64 = _extract_qr_base64(raw)
     qr_code = _extract_qr_code(raw)
 
@@ -1498,10 +1522,13 @@ async def me_whatsapp_qr_create(user: dict = Depends(_current_user)):
             await evolution_client.restart_instance(instance)
         except Exception as e:
             logger.warning("[QR] restart failed (non-fatal): %s", e)
-        # Wait a moment for Evolution to generate the new QR
         import asyncio as _aio
         await _aio.sleep(1.5)
-        raw = await _fetch_qr()
+        try:
+            raw = await evolution_client.connect_instance(instance)
+        except Exception as e:
+            logger.exception("evolution connect post-restart failed")
+            raise HTTPException(status_code=502, detail=f"evolution_qr_failed: {e}")
         qr_b64 = _extract_qr_base64(raw)
         qr_code = _extract_qr_code(raw)
 
@@ -1515,8 +1542,8 @@ async def me_whatsapp_qr_create(user: dict = Depends(_current_user)):
         "state": route.get("state"),
         "qr_base64": qr_b64,
         "qr_code": qr_code,
-        "qr": qr_b64 or qr_code,  # legacy field for old clients
-        "raw_keys": list((raw or {}).keys()),  # debug
+        "qr": qr_b64 or qr_code,
+        "raw_keys": list((raw or {}).keys()),
     }
 
 
