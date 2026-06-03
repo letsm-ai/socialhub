@@ -1,0 +1,46 @@
+{
+  "summary": "Full preview-env audit (Phase 7). Backend: 16/16 tests PASS — auth (admin+client+cookies), WhatsApp QR endpoints gracefully degrade with Evolution disabled, AI diagnostics shape complete, AI settings masking + openai_api_key preservation across provider switch verified, AI test-reply Arabic auto_reply, auto-handoff repeat-threshold (3 msgs), keyword handoff, already_handoff suppression, admin clients listing contains ahmed@test.com, chatwoot downgrade endpoint structured response, admin conversations active enriched with wa_id/contact_name/handoff/message_count. Frontend: client→/dashboard redirect ok, /dashboard/channels loads with whatsapp-connected-card (demo), QR Lite card correctly HIDDEN when /api/me/channels/whatsapp/qr/config returns enabled:false. Admin→/admin redirect ok, /admin/ai page renders run-diagnostics-btn + ai-test-input + ai-test-send-btn and AI test-reply round-trip works (Arabic response rendered).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "AdminAI.jsx model-select", "issue": "React hydration warning: <span> rendered as child of <option> at line ~318. Triggered by Emergent visual-edit instrumentation wrapping option content in a <span> with display:contents. Console noise only — select still functional. Consider rendering option label as plain string (no JSX wrapping).", "selector": "[data-testid=\"ai-model-select\"]", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_phase7_audit.py",
+    "/app/test_reports/pytest/phase7_results.xml"
+  ],
+  "action_items": [
+    "(LOW) Fix AdminAI.jsx <option> hydration warning by ensuring option children are plain strings, not JSX nodes wrapped by visual-edit data attributes.",
+    "(NICE-TO-HAVE) Expose a chatwoot-downgrade-btn somewhere in /admin (e.g. admin/clients toolbar) — backend endpoint works but no UI surface was found.",
+    "(REFACTOR) server.py is ~1968 lines now. Strongly recommend splitting into routers (admin_ai, admin_chatwoot, evolution_qr, broadcasts)."
+  ],
+  "critical_code_review_comments": [
+    "ai_agent.mask_settings_for_client correctly zeroes openai_api_key and emits a preview — never leaks raw key. Verified end-to-end (PUT openai with key → response.openai_api_key=='' and preview present; PUT emergent → preview preserved). Good.",
+    "ai_agent.update_settings drops empty openai_api_key from patch (line 155-156), so PUT {llm_provider:'emergent'} without a key does NOT overwrite the stored OpenAI key. Verified.",
+    "_evaluate_auto_handoff persists recent_user_msgs + consecutive_fallbacks counters BEFORE deciding (line 452). On repeat threshold, returns ('auto_handoff_after_reply', 'repeat_threshold_reached (3/3)'). Correct.",
+    "handle_incoming order: already_handoff → keyword → LLM → auto-handoff-after-reply. Correct precedence verified.",
+    "evolution_client.is_configured() simply checks env vars. /api/me/channels/whatsapp/qr/config returns {enabled:false} gracefully (no 500). Good for preview env.",
+    "/api/me/channels/whatsapp/qr/create raises 400 evolution_not_configured rather than 500 — correct per spec.",
+    "/api/admin/chatwoot/downgrade-clients-to-agent catches per-user exceptions individually so a single unreachable Chatwoot host doesn't break the response — returns ok:false per entry. Good.",
+    "/api/admin/conversations/active enriches with wa_id/contact_name from whatsapp_contacts collection. Items lacking a real Chatwoot conversation (like our test-reply convos 9001/9002/9003) have wa_id/contact_name=null — exposed correctly. Good.",
+    "server.py is now 1968 lines — long past the 700-line guideline. Refactor into routers strongly recommended.",
+    "Channels.jsx correctly gates QR Lite block behind `qrEnabled` state hydrated from /api/me/channels/whatsapp/qr/config. Verified — card not rendered when enabled:false.",
+    "AISettingsPatch.model_dump(exclude_none) would be cleaner than the comprehension on line 1637; current works but slightly fragile (False/0/'' all stripped today)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_phase7_audit.py (NEW — 16 cases, 8 classes, uses unique time-derived conversation IDs to avoid cross-run contamination, sets auto_handoff_fallback_threshold=99 during repeat test so only the repeat path can trigger)"
+  ],
+  "success_rate": {"backend": "100% (16/16 passed)", "frontend": "100% (client+admin login, channels gating, AI admin UI all verified)"},
+  "test_credentials": "Admin: admin@socialhub.om / Admin@2026 — Client: ahmed@test.com / Test@1234",
+  "seed_data_creation": "No new seed beyond reusing pre-existing ahmed@test.com client. Test created transient AI conversation rows (CONV_BASIC/REPEAT/KEYWORD, time-derived IDs) which are released from handoff in the session-scope teardown.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Run: `REACT_APP_BACKEND_URL=https://storage-system-test.preview.emergentagent.com pytest /app/backend/tests/test_phase7_audit.py -v`. Conversation IDs are derived from time.time() % 100000 so each run is fresh — no manual cleanup needed. The test sets auto_handoff_fallback_threshold=99 to isolate the repeat-threshold path. Evolution is intentionally NOT configured (EVOLUTION_API_URL empty in /app/backend/.env) — every QR endpoint test relies on that gracefully-degraded path. If production Evolution config is later added to .env, the QR tests will fail (expected — they assert enabled:false). Chatwoot downgrade endpoint structure test is non-strict on per-client ok=False (Chatwoot upstream may be unreachable from preview, acceptable per spec).",
+  "rca of the issue": "No bugs found. Two initial test failures during development were test-script issues, not product bugs: (1) login response is flat (not nested under .user), fixed by using data.get('user', data); (2) repeat-threshold test was hitting fallback_threshold first because the LLM's reply to 'كم سعر المنتج؟' triggered the fallback heuristic — fixed by setting auto_handoff_fallback_threshold=99 during the test to isolate the repeat path. Both fixes are in the test, not product code."
+}
