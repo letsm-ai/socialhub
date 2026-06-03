@@ -33,6 +33,7 @@ import chatwoot_client
 import email_service
 import evolution_client
 import evolution_routing
+import whatsapp_byok
 import whatsapp_meta
 import whatsapp_routing
 import thawani  # noqa: F401  -- gated by env
@@ -1438,6 +1439,49 @@ async def _resolve_user_for_whatsapp(user: dict) -> dict:
 async def me_whatsapp_qr_config(user: dict = Depends(_current_user)):
     """Whether QR-based linking is available on this deployment."""
     return {"enabled": evolution_client.is_configured()}
+
+
+# ============================
+# WhatsApp BYOK (Manual Meta credentials)
+# ============================
+class BYOKConnectPayload(BaseModel):
+    phone_number_id: str
+    waba_id: str
+    access_token: str
+
+
+@api_router.get("/me/channels/whatsapp/byok")
+async def me_whatsapp_byok_get(user: dict = Depends(_current_user)):
+    doc = await whatsapp_byok.get_for_user(db, user["id"])
+    return {
+        "connected": bool(doc),
+        "data": whatsapp_byok.mask_for_client(doc),
+    }
+
+
+@api_router.post("/me/channels/whatsapp/byok")
+async def me_whatsapp_byok_connect(
+    payload: BYOKConnectPayload, user: dict = Depends(_current_user),
+):
+    fresh = await _resolve_user_for_whatsapp(user)
+    try:
+        record = await whatsapp_byok.connect_user(
+            db, user_doc=fresh,
+            phone_number_id=payload.phone_number_id.strip(),
+            waba_id=payload.waba_id.strip(),
+            access_token=payload.access_token.strip(),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception("BYOK connect failed")
+        raise HTTPException(status_code=500, detail=f"byok_failed: {e}")
+    return {"ok": True, "data": whatsapp_byok.mask_for_client(record)}
+
+
+@api_router.delete("/me/channels/whatsapp/byok")
+async def me_whatsapp_byok_delete(user: dict = Depends(_current_user)):
+    return await whatsapp_byok.disconnect_user(db, user["id"])
 
 
 @api_router.get("/me/channels/whatsapp/qr/debug")

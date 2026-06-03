@@ -50,15 +50,23 @@ export default function Channels() {
   const [mockMode, setMockMode] = useState(true);
   const [qrEnabled, setQrEnabled] = useState(false);
   const [qrModalOpen, setQrModalOpen] = useState(false);
-  const [qrImage, setQrImage] = useState("");      // base64 image (preferred)
-  const [qrCode, setQrCode] = useState("");        // raw "2@..." string (fallback)
+  const [qrImage, setQrImage] = useState("");
+  const [qrCode, setQrCode] = useState("");
   const [qrLoading, setQrLoading] = useState(false);
   const [qrState, setQrState] = useState({ linked: false, state: "not_linked", wa_number: null });
+
+  // Manual BYOK state
+  const [byok, setByok] = useState(null); // { connected, data: {...} }
+  const [byokModalOpen, setByokModalOpen] = useState(false);
+  const [byokSaving, setByokSaving] = useState(false);
+  const [byokForm, setByokForm] = useState({ phone_number_id: "", waba_id: "", access_token: "" });
+  const [byokError, setByokError] = useState("");
 
   useEffect(() => {
     isFacebookConfigured().then((b) => setMockMode(!b)).catch(() => setMockMode(true));
     api.get("/me/channels/whatsapp/qr/config").then(({ data }) => setQrEnabled(!!data.enabled)).catch(() => {});
     api.get("/me/channels/whatsapp/qr/status").then(({ data }) => setQrState(data)).catch(() => {});
+    api.get("/me/channels/whatsapp/byok").then(({ data }) => setByok(data)).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -236,6 +244,53 @@ export default function Channels() {
     }
   };
 
+  // BYOK handlers
+  const openByokModal = () => {
+    setByokError("");
+    setByokForm({ phone_number_id: "", waba_id: "", access_token: "" });
+    setByokModalOpen(true);
+  };
+
+  const submitByok = async () => {
+    setByokError("");
+    if (!byokForm.phone_number_id.trim() || !byokForm.waba_id.trim() || !byokForm.access_token.trim()) {
+      setByokError(lang === "ar" ? "كل الحقول مطلوبة" : "All fields are required");
+      return;
+    }
+    setByokSaving(true);
+    try {
+      const { data } = await api.post("/me/channels/whatsapp/byok", byokForm);
+      setByok({ connected: true, data: data.data });
+      setByokModalOpen(false);
+      setToast(
+        lang === "ar"
+          ? `🎉 تم ربط واتساب الخاص بك بنجاح! الرقم: ${data.data.display_phone || ""}`
+          : `🎉 Your WhatsApp is connected! Number: ${data.data.display_phone || ""}`
+      );
+      setTimeout(() => setToast(""), 6000);
+    } catch (e) {
+      setByokError(formatApiErrorDetail(e.response?.data?.detail) || e.message);
+    } finally {
+      setByokSaving(false);
+    }
+  };
+
+  const disconnectByok = async () => {
+    if (!window.confirm(
+      lang === "ar"
+        ? "سيتم فصل رقم واتساب الخاص بك. لن يصلك مزيد من الرسائل. هل أنت متأكد؟"
+        : "Your WhatsApp number will be disconnected. You'll stop receiving messages. Continue?"
+    )) return;
+    try {
+      await api.delete("/me/channels/whatsapp/byok");
+      setByok({ connected: false, data: null });
+      setToast(lang === "ar" ? "تم فصل رقم واتساب." : "WhatsApp disconnected.");
+      setTimeout(() => setToast(""), 3000);
+    } catch (e) {
+      setError(formatApiErrorDetail(e.response?.data?.detail) || e.message);
+    }
+  };
+
   return (
     <div className="space-y-6" data-testid="channels-page">
       <div>
@@ -280,31 +335,47 @@ export default function Channels() {
         />
       )}
 
-      {/* WhatsApp Lite (QR) — alternative for clients without Meta dev account */}
-      {qrEnabled && (
-        qrState.linked ? (
-          <WhatsAppLiteConnectedCard
-            state={qrState}
-            onDisconnect={disconnectQr}
-            lang={lang}
-          />
-        ) : (
-          <WhatsAppLiteConnectCard
-            onConnect={openQrModal}
-            loading={qrLoading && qrModalOpen}
-            lang={lang}
-          />
-        )
+      {/* WhatsApp BYOK — manual link by Phone Number ID + Access Token */}
+      {byok?.connected ? (
+        <WhatsAppByokConnectedCard
+          data={byok.data}
+          onDisconnect={disconnectByok}
+          lang={lang}
+        />
+      ) : (
+        <WhatsAppByokConnectCard onConnect={openByokModal} lang={lang} />
       )}
 
-      {/* QR scan modal */}
-      {qrModalOpen && (
-        <QrModal
-          qrImage={qrImage}
-          qrCode={qrCode}
-          loading={qrLoading}
-          onClose={() => setQrModalOpen(false)}
-          onRefresh={refreshQr}
+      {/* Coming-soon cards: Embedded Signup + QR Lite */}
+      <ChannelComingSoonCard
+        icon={<Send size={26} className="text-blue-700" />}
+        title={lang === "ar" ? "ربط رقمك بالنقر (Embedded Signup)" : "One-click linking (Embedded Signup)"}
+        subtitle={lang === "ar"
+          ? "اربط رقمك مباشرة عبر نافذة فيس بوك بنقرة واحدة — قيد مراجعة Meta."
+          : "Link your number through a single Facebook popup — pending Meta review."}
+        badge={lang === "ar" ? "قيد المراجعة" : "Under review"}
+        lang={lang}
+      />
+
+      <ChannelComingSoonCard
+        icon={<QrCode size={26} className="text-amber-700" />}
+        title={lang === "ar" ? "ربط بـ QR (Lite)" : "QR linking (Lite)"}
+        subtitle={lang === "ar"
+          ? "ربط سريع بمسح QR من واتساب — للباقات الأقل. قريباً."
+          : "Quick QR scan from WhatsApp — for lower-tier plans. Coming soon."}
+        badge={lang === "ar" ? "قريباً" : "Coming soon"}
+        lang={lang}
+      />
+
+      {/* BYOK modal */}
+      {byokModalOpen && (
+        <ByokModal
+          form={byokForm}
+          setForm={setByokForm}
+          loading={byokSaving}
+          error={byokError}
+          onSubmit={submitByok}
+          onClose={() => setByokModalOpen(false)}
           lang={lang}
         />
       )}
@@ -844,4 +915,242 @@ const QrModal = ({ qrImage, qrCode, loading, onClose, onRefresh, lang }) => (
       </div>
     </div>
   </div>
+);
+
+
+/* ------------------------------------------------------------------ */
+/* WhatsApp BYOK — connect card (not yet linked)                       */
+/* ------------------------------------------------------------------ */
+const WhatsAppByokConnectCard = ({ onConnect, lang }) => (
+  <Card data-testid="whatsapp-byok-connect-card" className="rounded-3xl border-emerald-200 bg-emerald-50/30">
+    <CardContent className="p-7 md:p-8 space-y-5">
+      <div className="flex items-start gap-4">
+        <div className="w-14 h-14 rounded-2xl bg-emerald-100 border border-emerald-200 flex items-center justify-center flex-shrink-0">
+          <MessageCircle size={28} className="text-emerald-700" />
+        </div>
+        <div className="flex-1">
+          <div className="flex flex-wrap items-center gap-2 mb-1">
+            <h2 className="font-heading text-xl md:text-2xl font-bold text-stone-900">
+              {lang === "ar" ? "اربط رقمك الخاص (Meta رسمي)" : "Connect your number (Meta official)"}
+            </h2>
+            <Badge variant="outline" className="text-[10px] border-emerald-300 bg-emerald-100 text-emerald-900">
+              {lang === "ar" ? "آمن ومُوصى به" : "Recommended"}
+            </Badge>
+          </div>
+          <p className="text-stone-700 text-sm leading-relaxed">
+            {lang === "ar"
+              ? "اربط رقم WhatsApp Business الخاص بك بإدخال بياناتك من Meta Business Manager — رسمي 100%، يدعم الحملات والقوالب."
+              : "Link your own WhatsApp Business number using credentials from Meta Business Manager — 100% official, supports campaigns and templates."}
+          </p>
+        </div>
+      </div>
+
+      <div className="rounded-2xl bg-white border border-stone-200 p-4 space-y-2">
+        <p className="text-xs font-semibold text-stone-700">
+          {lang === "ar" ? "ما تحتاجه قبل البدء:" : "What you'll need:"}
+        </p>
+        <ul className="text-xs text-stone-600 space-y-1 list-disc ms-5">
+          <li>Phone Number ID ({lang === "ar" ? "من business.facebook.com" : "from business.facebook.com"})</li>
+          <li>WhatsApp Business Account ID (WABA ID)</li>
+          <li>Permanent Access Token ({lang === "ar" ? "System User token" : "System User token"})</li>
+        </ul>
+        <a
+          href="https://developers.facebook.com/docs/whatsapp/cloud-api/get-started"
+          target="_blank"
+          rel="noreferrer"
+          className="text-xs text-emerald-700 hover:underline inline-flex items-center gap-1 mt-1"
+        >
+          {lang === "ar" ? "كيف أحصل عليها؟" : "How do I get these?"}
+          <ExternalLink size={11} />
+        </a>
+      </div>
+
+      <Button
+        data-testid="connect-whatsapp-byok-btn"
+        onClick={onConnect}
+        className="bg-emerald-800 hover:bg-emerald-900 text-white rounded-xl h-12 px-6"
+      >
+        <MessageCircle className="me-2" size={16} />
+        {lang === "ar" ? "بدء الربط" : "Start linking"}
+      </Button>
+    </CardContent>
+  </Card>
+);
+
+/* ------------------------------------------------------------------ */
+/* WhatsApp BYOK — connected                                           */
+/* ------------------------------------------------------------------ */
+const WhatsAppByokConnectedCard = ({ data, onDisconnect, lang }) => (
+  <Card data-testid="whatsapp-byok-connected-card" className="rounded-3xl border-emerald-200 bg-white">
+    <CardContent className="p-6 flex flex-col md:flex-row md:items-center gap-4">
+      <div className="w-14 h-14 rounded-2xl bg-emerald-50 border border-emerald-200 flex items-center justify-center flex-shrink-0">
+        <Check size={26} className="text-emerald-700" />
+      </div>
+      <div className="flex-1">
+        <div className="flex items-center gap-2 mb-1 flex-wrap">
+          <p className="font-semibold text-stone-900">
+            {data?.verified_name || (lang === "ar" ? "حساب واتساب" : "WhatsApp account")}
+          </p>
+          <Badge className="bg-emerald-700 text-white hover:bg-emerald-700 text-[10px]">
+            {lang === "ar" ? "نشط" : "ACTIVE"}
+          </Badge>
+        </div>
+        <p className="text-stone-500 text-xs space-x-3" dir="ltr">
+          <span>📱 +{data?.display_phone || "—"}</span>
+          <span className="text-stone-300">·</span>
+          <span>{lang === "ar" ? "Token:" : "Token:"} <code className="font-mono text-stone-800">{data?.access_token_preview || "—"}</code></span>
+        </p>
+      </div>
+      <Button
+        data-testid="disconnect-whatsapp-byok-btn"
+        onClick={onDisconnect}
+        variant="outline"
+        className="rounded-xl border-red-200 text-red-700 hover:bg-red-50"
+      >
+        <X size={14} className="me-2" />
+        {lang === "ar" ? "فصل" : "Disconnect"}
+      </Button>
+    </CardContent>
+  </Card>
+);
+
+/* ------------------------------------------------------------------ */
+/* BYOK modal                                                          */
+/* ------------------------------------------------------------------ */
+const ByokModal = ({ form, setForm, loading, error, onSubmit, onClose, lang }) => (
+  <div
+    data-testid="byok-modal"
+    className="fixed inset-0 z-50 bg-stone-900/70 backdrop-blur-sm flex items-center justify-center p-4"
+    onClick={onClose}
+  >
+    <div
+      className="bg-white rounded-3xl max-w-lg w-full p-7 space-y-5 relative max-h-[90vh] overflow-auto"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <button
+        onClick={onClose}
+        data-testid="byok-modal-close"
+        className="absolute top-4 end-4 w-8 h-8 rounded-full hover:bg-stone-100 flex items-center justify-center"
+      >
+        <X size={18} />
+      </button>
+
+      <div>
+        <h3 className="font-heading text-xl font-bold text-stone-900 mb-1">
+          {lang === "ar" ? "ربط واتساب الخاص بك" : "Connect your WhatsApp"}
+        </h3>
+        <p className="text-sm text-stone-600">
+          {lang === "ar"
+            ? "أدخل بيانات Meta Business Manager — سنتحقق منها مباشرة مع Meta."
+            : "Enter your Meta Business Manager credentials — we'll verify them with Meta."}
+        </p>
+      </div>
+
+      <div className="space-y-3">
+        <div>
+          <label className="block text-xs font-semibold text-stone-700 mb-1">
+            Phone Number ID
+          </label>
+          <input
+            data-testid="byok-phone-number-id"
+            type="text"
+            value={form.phone_number_id}
+            onChange={(e) => setForm({ ...form, phone_number_id: e.target.value })}
+            placeholder="123456789012345"
+            dir="ltr"
+            className="w-full border border-stone-300 rounded-lg px-3 py-2 text-sm font-mono"
+          />
+          <p className="text-[11px] text-stone-500 mt-1">
+            {lang === "ar"
+              ? "Meta Business → WhatsApp → API Setup → Phone number ID"
+              : "Meta Business → WhatsApp → API Setup → Phone number ID"}
+          </p>
+        </div>
+
+        <div>
+          <label className="block text-xs font-semibold text-stone-700 mb-1">
+            WhatsApp Business Account ID
+          </label>
+          <input
+            data-testid="byok-waba-id"
+            type="text"
+            value={form.waba_id}
+            onChange={(e) => setForm({ ...form, waba_id: e.target.value })}
+            placeholder="987654321098765"
+            dir="ltr"
+            className="w-full border border-stone-300 rounded-lg px-3 py-2 text-sm font-mono"
+          />
+          <p className="text-[11px] text-stone-500 mt-1">
+            {lang === "ar"
+              ? "نفس الصفحة، تحت Phone number ID"
+              : "Same page, below Phone number ID"}
+          </p>
+        </div>
+
+        <div>
+          <label className="block text-xs font-semibold text-stone-700 mb-1">
+            {lang === "ar" ? "Permanent Access Token (يبدأ بـ EAA…)" : "Permanent Access Token (starts with EAA…)"}
+          </label>
+          <textarea
+            data-testid="byok-access-token"
+            value={form.access_token}
+            onChange={(e) => setForm({ ...form, access_token: e.target.value })}
+            placeholder="EAAxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            dir="ltr"
+            rows={3}
+            className="w-full border border-stone-300 rounded-lg px-3 py-2 text-xs font-mono resize-none"
+          />
+          <p className="text-[11px] text-stone-500 mt-1">
+            {lang === "ar"
+              ? "Meta Business → Settings → System Users → أنشئ System User بصلاحية واتساب وأنشئ token دائم"
+              : "Meta Business → Settings → System Users → create user with WhatsApp permissions and generate permanent token"}
+          </p>
+        </div>
+      </div>
+
+      {error && (
+        <div data-testid="byok-error" className="rounded-xl bg-red-50 border border-red-200 text-red-700 text-sm p-3 flex items-start gap-2">
+          <AlertTriangle size={16} className="mt-0.5 flex-shrink-0" />
+          <span className="break-words">{error}</span>
+        </div>
+      )}
+
+      <div className="flex items-center gap-3">
+        <Button
+          data-testid="byok-submit-btn"
+          onClick={onSubmit}
+          disabled={loading}
+          className="bg-emerald-800 hover:bg-emerald-900 text-white rounded-xl flex-1 h-11"
+        >
+          {loading ? <Loader2 className="animate-spin me-2" size={16} /> : <Check className="me-2" size={16} />}
+          {lang === "ar" ? "تحقق واربط" : "Verify & Connect"}
+        </Button>
+        <Button onClick={onClose} variant="outline" className="rounded-xl h-11" disabled={loading}>
+          {lang === "ar" ? "إلغاء" : "Cancel"}
+        </Button>
+      </div>
+    </div>
+  </div>
+);
+
+/* ------------------------------------------------------------------ */
+/* Generic "Coming soon" channel card                                  */
+/* ------------------------------------------------------------------ */
+const ChannelComingSoonCard = ({ icon, title, subtitle, badge, lang }) => (
+  <Card className="rounded-3xl border-stone-200 bg-stone-50/40 opacity-75">
+    <CardContent className="p-6 flex items-center gap-4">
+      <div className="w-12 h-12 rounded-2xl bg-white border border-stone-200 flex items-center justify-center flex-shrink-0">
+        {icon}
+      </div>
+      <div className="flex-1">
+        <div className="flex items-center gap-2 flex-wrap">
+          <p className="font-semibold text-stone-900 text-base">{title}</p>
+          <Badge variant="outline" className="text-[10px] border-stone-300 bg-white text-stone-600">
+            {badge}
+          </Badge>
+        </div>
+        <p className="text-stone-500 text-xs mt-1 leading-relaxed">{subtitle}</p>
+      </div>
+    </CardContent>
+  </Card>
 );
