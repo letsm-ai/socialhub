@@ -1,129 +1,86 @@
 # SocialHub — Product Requirements Document
 
 ## Original Problem Statement
-SaaS marketing site + billing dashboard for omnichannel customer service platform (similar to respond.io). Messaging engine = self-hosted Chatwoot. Needs landing, auth, client dashboard, super admin dashboard, integrations with Chatwoot (auto-provisioning + SSO), payment gateway, and WhatsApp.
+SaaS marketing website + billing dashboard for an omnichannel customer service platform called **SocialHub** (similar to respond.io). The messaging engine is a self-hosted Chatwoot instance on a Hostinger VPS. The platform requires:
+- Landing page + JWT authentication
+- Client dashboard + Super Admin dashboard
+- Chatwoot integration (auto-provisioning + SSO)
+- WhatsApp Embedded Signup (Meta Cloud API)
+- Local payment gateways (Thawani Pay)
+- AI Auto-reply
+- Email notifications (Resend)
 
-User language: **Arabic** (must always respond in Arabic).
+**User language**: Arabic (always respond in Arabic).
 
-## Current Status — FULLY LIVE IN PRODUCTION ✅
+---
 
-| Service | URL | Status |
-|---------|-----|--------|
-| SocialHub app | https://app.letsm.io | ✅ Live with SSL |
-| Chatwoot | https://letsm.io | ✅ Live with SSL (self-managed, branded) |
+## Architecture
+- **Frontend**: React 18 + Tailwind + shadcn/ui (Emergent preview + deployed to VPS via GitHub Actions)
+- **Backend**: FastAPI + Motor (MongoDB) — runs on VPS as `socialhub-api.service` (systemd)
+- **Chatwoot**: Docker stack at `/root/docker-compose.yaml` (rails + sidekiq + postgres + redis)
+- **Reverse Proxy**: Traefik (replaces Nginx) — listens on host network ports :80/:443
+- **Domains**:
+  - `letsm.io` → Chatwoot (Rails app)
+  - SocialHub frontend on Emergent preview (configured via `REACT_APP_BACKEND_URL`)
 
-## Infrastructure
-- VPS: Hostinger 76.13.220.229 (Ubuntu 24.04)
-- Traefik: self-managed, entrypoints `http`/`https`, auto SSL via Let's Encrypt
-- Postgres + Redis: Coolify-managed (we don't touch them)
-- Chatwoot Rails + Sidekiq: self-managed (`/root/chatwoot/`), GitHub-deployed
-- SocialHub backend: systemd `socialhub-api` on host `0.0.0.0:8001`
-- SocialHub frontend: nginx-alpine container `socialhub-web` on `coolify` Docker network
+---
 
-## Completed Features
-- ✅ RTL landing (AR/EN), Auth (JWT+brute force), Wallet system
-- ✅ Client dashboard with company_name pill (no Chatwoot UI exposed)
-- ✅ Super admin dashboard (custom SocialHub branding)
-- ✅ Chatwoot integration: autoprovision + SSO + per-user access_token
-- ✅ **Demo WhatsApp flow**: instant connect with `+968 9999 8888`, seeds 3 Arabic conversations
-- ✅ **Simulate new message**: manual button + auto-mode (sends every 45s for 5 min)
-- ✅ **Chatwoot custom branding**: favicons, CSS, env vars, idempotent script
-- ✅ **WhatsApp Meta Tech Provider backend** (gated by env, ready to flip live)
-- ✅ **Thawani Pay backend** (gated by env, ready to flip live)
+## Completed Features (as of Feb 2026)
+- ✅ JWT auth + brute-force lockout (5 attempts → 15 min)
+- ✅ Chatwoot auto-provisioning on user registration (account + agent user)
+- ✅ Demo WhatsApp inbox + simulate-message feature
+- ✅ WhatsApp Embedded Signup (Meta SDK) — currently mocked pending Meta App Review
+- ✅ WhatsApp BYOK (Bring Your Own Key) — clients paste Meta tokens directly
+- ✅ AI Auto-reply with Dual Provider (Emergent Universal Key OR client's OpenAI key)
+- ✅ Auto-Handoff system (keyword + repeat + AI fallback triggers)
+- ✅ Wallet system + Thawani Pay top-ups
+- ✅ Subscription plans + upgrades
+- ✅ Chatwoot SSO login for clients (locked to `agent` role + CSS injection to hide sidebar)
+- ✅ Webhook fan-out: WhatsApp Meta → Chatwoot + back
+- ✅ Resend email notifications
+- ✅ Super Admin dashboard (clients, broadcasts, analytics)
+- ✅ **Channel SSO Bridge (Telegram POC)** — popup window.open + 3s polling for inbox detection (NEW Feb 2026)
 
-## Integrations (gating by env)
-| Service | File | Status | How to activate |
-|---------|------|--------|-----------------|
-| Chatwoot | `chatwoot_client.py` | ✅ ACTIVE | (configured, working) |
-| Meta WhatsApp | `whatsapp_meta.py` | ⚪ MOCK | Add 6 META_* env vars |
-| Thawani Pay | `thawani.py` | ⚪ MOCK | Add THAWANI_SECRET_KEY + PUBLISHABLE_KEY |
+---
 
-## Production Credentials
-| Role | Email | Password |
-|------|-------|----------|
-| SocialHub Admin | admin@letsm.io | Woot@Ch4321 |
-| SocialHub Test Client | ahmed@test.com | Test@1234 (`company_name='متجر أحمد'`) |
-| Chatwoot Super Admin | (set by user during onboarding) | (set by user) |
+## Active P0 Task
+**Hybrid SSO + Telegram POC** — DONE on Emergent. Awaiting "Save to GitHub" → VPS deployment → E2E test by user.
 
-## Activate Thawani (when ready)
-```env
-THAWANI_SECRET_KEY="..."         # from Thawani merchant portal
-THAWANI_PUBLISHABLE_KEY="..."
-THAWANI_WEBHOOK_SECRET="..."     # set by you in portal
-THAWANI_ENV="uat"                # or "production"
-```
-Webhook URL to register in Thawani portal: `https://app.letsm.io/api/webhooks/thawani`
+Implementation:
+- `backend/chatwoot_sso.py` — generates Chatwoot SSO URLs with `redirect_to` to inbox-creation pages
+- `server.py` — 3 endpoints: `/sso/supported`, `/sso/link`, `/sso/inboxes`
+- `Channels.jsx` — Telegram card + `<ChannelSSOPollingOverlay>` modal
+- Polls Chatwoot inboxes every 3s; closes popup & shows toast when new inbox detected
 
-## Activate Meta WhatsApp (when ready)
-```env
-META_APP_ID="..."
-META_APP_SECRET="..."
-META_SYSTEM_USER_TOKEN="..."
-META_EMBEDDED_SIGNUP_CONFIG_ID="..."
-META_TECH_PROVIDER_BUSINESS_ID="..."
-WHATSAPP_WEBHOOK_VERIFY_TOKEN="..."
-```
-Meta App setup needs:
-- Webhook URL: `https://app.letsm.io/api/webhooks/whatsapp`
-- OAuth Redirect URI: `https://app.letsm.io/api/meta/oauth/callback`
+Env required on VPS: `CHATWOOT_PLATFORM_TOKEN` or `CHATWOOT_PLATFORM_API_KEY` + `CHATWOOT_URL` ✅ done
 
-## Key Files
-| File | Purpose |
-|------|---------|
-| `/app/backend/server.py` | FastAPI routes (~1100 lines — needs refactor to routers/) |
-| `/app/backend/whatsapp_meta.py` | Meta Cloud API client |
-| `/app/backend/thawani.py` | Thawani checkout sessions + webhook signature |
-| `/app/backend/chatwoot_client.py` | Chatwoot Platform + Application API + demo seeding |
-| `/app/backend/auth.py` | JWT + brute force |
-| `/app/backend/tests/test_phase6_thawani.py` | Phase 6 regression tests |
-| `/app/frontend/src/lib/facebook.js` | FB SDK (runtime config) |
-| `/app/frontend/src/pages/(dashboard)/Channels.jsx` | Demo connect + simulate + auto-mode |
-| `/app/frontend/src/pages/(dashboard)/Wallet.jsx` | Topup with Thawani redirect support |
-| `/app/deploy-traefik.sh` | SocialHub production deploy |
-| `/app/chatwoot/deploy-chatwoot.sh` | Chatwoot production deploy |
-| `/app/chatwoot/apply-branding.sh` | Re-apply branding after upgrades |
+---
 
 ## Backlog
 ### P1
-- 🔑 Obtain & install Thawani Pay credentials (test keys available immediately)
-- 🔑 Obtain & install Meta WhatsApp Tech Provider credentials
-- 🧹 Optional: delete obsolete Coolify "Chatwoot" service entry
+- Facebook Messenger + Instagram DMs via SSO modal (needs FB App credentials in Chatwoot)
+- WhatsApp Broadcasts (CSV upload + Meta template messages)
+- WhatsApp Embedded Signup (un-mock once Meta App Review approved)
 
 ### P2
-- Refactor `server.py` (~1100 lines) into `/app/backend/routers/`: auth, account, wallet, channels, admin, whatsapp, thawani
-- Extract `TOPUP_PACKAGES`, `PLAN_CATALOG`, etc. into `config/billing.py`
-- Public system status page
-- Email notifications (SendGrid/Resend)
-- Audit log for admin actions
+- Active Conversations page (admin view: who's replying, last msg, manual override)
 
-## Key Commands
-```bash
-# Update SocialHub on VPS
-cd /var/www/socialhub && git pull && systemctl restart socialhub-api && \
-  cd frontend && CI=false yarn build && docker restart socialhub-web
+### P3
+- Refactor `server.py` (now 2114 lines) into modular routers (`/routes/whatsapp.py`, `/routes/admin.py`, `/routes/channels.py`)
 
-# Update Chatwoot
-cd /root/chatwoot && docker compose pull && docker compose up -d
-bash <(curl -fsSL https://raw.githubusercontent.com/letsm-ai/socialhub/main/chatwoot/apply-branding.sh)
+---
 
-# Logs
-tail -f /var/log/socialhub-api.log
-docker logs -f socialhub-web
-docker logs -f chatwoot-rails
-```
+## Known Infrastructure Issues (NON-CODE)
+- **VPS has multiple competing Docker stacks**: `/root/docker-compose.yaml` (canonical), `/root/chatwoot/` (broken Coolify leftover — disabled with `restart: "no"`), `/opt/letsm/` (production SocialHub backend in docker)
+- **Auto-restart hazard**: If VPS reboots, `unless-stopped` containers from `/root/chatwoot/` may conflict. Workaround: keep `/root/docker-compose.yaml` running and the chatwoot/ folder's restart policy set to "no".
+- **Platform App allowlist**: New Platform App in Chatwoot requires manual permissible-resources setup. User ran `PlatformAppPermissible.find_or_create_by(...)` in Rails console to grant access to all Users + Accounts.
 
-## Changelog
-- **2026-06-02**: WhatsApp Lite (QR) via Evolution API. Added `evolution_client.py` (HTTP client for self-hosted Evolution REST API), `evolution_routing.py` (bridges Evolution webhooks → Chatwoot, mirrors `whatsapp_routing.py`), and 4 new endpoints: `GET /api/me/channels/whatsapp/qr/config`, `POST /api/me/channels/whatsapp/qr/create`, `GET /api/me/channels/whatsapp/qr/status`, `DELETE /api/me/channels/whatsapp/qr`, plus `POST /api/webhooks/evolution`. Existing Chatwoot outgoing webhook now auto-routes replies to Evolution when the conversation belongs to a QR session. Channels UI gains a `WhatsAppLiteConnectCard` + QR modal with live polling. New env vars: `EVOLUTION_API_URL`, `EVOLUTION_API_KEY`. New deploy guide: `EVOLUTION_DEPLOY.md`. UI is hidden when Evolution is not configured (`enabled: false` from config endpoint), so no impact on existing deployments.
-- **2026-05-21 (v4)**: Lock down Chatwoot to "inbox only" for clients. New SocialHub-provisioned Chatwoot users now get role=`agent` (was `administrator`) so they physically cannot create inboxes / change integrations / touch account settings inside Chatwoot — channel setup is owned exclusively by SocialHub. Belt-and-suspenders CSS hides "New Inbox" buttons, channel selector, and Integrations/Inbox-new sub-nav inside the Chatwoot UI (updated `chatwoot/apply-branding.sh`). New `chatwoot_client.set_user_role(account_id, user_id, role)`. New admin endpoint `POST /api/admin/chatwoot/downgrade-clients-to-agent` is an idempotent one-shot to demote every existing CLIENT user in Chatwoot from administrator → agent.
-- **2026-05-21 (v3)**: Smart auto-handoff. New `_evaluate_auto_handoff` in `ai_agent.py` triggers on (a) consecutive fallback replies, (b) repeated near-identical user messages within a configurable window, or (c) explicit handoff keyword. New settings: `auto_handoff_enabled` (bool), `auto_handoff_fallback_threshold` (int, default 2), `auto_handoff_repeat_threshold` (int, default 3), `auto_handoff_repeat_window_seconds` (int, default 120). When triggered, the bot is silenced for that conversation, an optional `extra_reply` (handoff message) is sent to the customer, and a 🚨 `team_note` is posted as a private note in Chatwoot so the human agent sees why. New `_is_fallback_reply` robustly detects bot "I don't know" replies via head/tail/phrase matching to survive LLM paraphrasing. `get_settings` now backfills missing fallback/handoff messages so detection works on legacy docs. AdminAI.jsx adds an "Auto-handoff" card with toggle + 3 threshold inputs.
-- **2026-05-21 (v2)**: Dual AI provider toggle. New settings fields `llm_provider` (`emergent` | `openai`) and `openai_api_key`. `ai_agent.generate_reply` now branches: emergent path uses `LlmChat`, openai path uses `openai.AsyncOpenAI` directly with the admin-supplied key. New `mask_settings_for_client` ensures the raw OpenAI key is never returned by `GET /admin/ai/settings` (returns `openai_api_key_preview` instead). Update endpoint preserves stored key on empty input. `GET /admin/ai/diagnostics` now reports `provider`, `provider_ready`, `openai_sdk_available`, `openai_api_key_stored`. AdminAI.jsx adds a provider-selection card with two large radio buttons, masked OpenAI key input (eye toggle), model selector (gpt-4o / gpt-4o-mini / gpt-4-turbo / gpt-3.5-turbo), and updated diagnostics badges that change based on the active provider. Verified locally: switch between providers works, raw key never leaks, fake key fails gracefully, emergent path still replies.
-- **2026-05-21**: AI Auto-reply diagnostics + test panel. Added detailed `[AI]` logging in `whatsapp_routing.append_incoming_message` and `ai_agent.generate_reply` to surface silent failures. New admin endpoints: `GET /api/admin/ai/diagnostics` (returns LLM lib status, EMERGENT_LLM_KEY presence + preview, settings, KB count, route count, recent webhook events) and `POST /api/admin/ai/test-reply` (runs full handler on a fake conversation without calling Meta/Chatwoot). New `AdminAI.jsx` panel exposes both with status badges and inline result preview. Verified locally: gpt-4o reply, handoff detection, fallback all working.
-- **2026-05-18/19**: WhatsApp ↔ Chatwoot routing live. New module `whatsapp_routing.py` parses Meta webhooks → finds/creates Chatwoot contact + conversation → posts incoming message. `POST /api/webhooks/chatwoot` handles agent outgoing replies → sends via Meta. Admin setup: `POST /api/admin/whatsapp/setup-routing` (one-time creates API inbox), `GET /api/admin/whatsapp/route` (status). New env vars in `whatsapp_meta.get_config()`: `phone_number_id`, `waba_id`, `display_phone_number`. Chatwoot moved to `inbox.letsm.io` with full SocialHub/letsmAI branding (SVG logo, DB-level installation_configs updated, Rails layout injected with brand-rewrite.js).
-- **2026-05-17 evening (later)**: Trial banner UI added to `Dashboard.jsx` (shows days remaining + welcome gift messages, only when `trial.active`). GitHub Actions auto-deploy workflow `.github/workflows/deploy.yml` created (SSH → git pull → pip install → restart systemd → yarn build → docker restart). `DEPLOY.md` documents the one-time secrets setup.
-- **2026-05-13/15**: Initial build (auth, landing, dashboards, Chatwoot, wallet, channels mock)
-- **2026-05-16 early**: Production deploy to app.letsm.io via Traefik (Coolify-coexistence). Removed Made-with-Emergent badge. Deleted broken GitHub Actions.
-- **2026-05-16 mid**: Hid Chatwoot from client UI, added company_name pill, WhatsApp Tech Provider backend (env-gated)
-- **2026-05-16 late**: Migrated Chatwoot off Coolify routing. Self-managed via `/root/chatwoot/`. Fixed Traefik entrypoint name mismatch. New Platform API key issued.
-- **2026-05-17 morning**: Chatwoot custom branding (favicons + CSS + INSTALLATION_NAME). Re-added "Open Inbox" button on dashboard. Auto-trigger Chatwoot account creation per signup. Demo number `+968 9999 8888` with branded Arabic copy.
-- **2026-05-17 afternoon**: Auto-seed 3 Chatwoot demo conversations (Fatima, Salim, Maryam) on demo connect. New `/api/me/channels/whatsapp/demo/simulate` endpoint with 8 Arabic personas. UI "Send test message" + "Auto-send 5 min" buttons.
-- **2026-05-17 evening**: Thawani Pay integration (`thawani.py`): create_checkout_session, webhook signature verification (HMAC-SHA256 of body+timestamp), topup gated by env. New `/api/payments/config`, `/api/webhooks/thawani`. Wallet.jsx handles `payment_url` redirect + `?topup=success/cancelled` URL params. All Phase 6 tests pass.
+---
+
+## Test Credentials
+See `/app/memory/test_credentials.md`.
+
+---
+
+## Last Updated
+2026-02-06 — Hybrid SSO + Telegram POC built, awaiting deployment + E2E test.
