@@ -30,6 +30,7 @@ from auth import (
 import ai_agent
 import broadcasts as broadcasts_mod
 import chatwoot_client
+import chatwoot_sso
 import email_service
 import evolution_client
 import evolution_routing
@@ -1047,6 +1048,70 @@ async def disconnect_whatsapp(user: dict = Depends(_current_user)):
         {"$unset": {"chatwoot_demo_seeded": ""}},
     )
     return {"ok": True}
+
+
+# ============================
+# Channel SSO Bridge (Hybrid: popup window.open + Polling)
+# Used for Telegram (POC), Facebook, Instagram, Webchat, Email channels
+# ============================
+class SSOLinkRequest(BaseModel):
+    channel: str  # telegram | facebook | instagram | webchat | email | whatsapp_embedded
+
+
+@api_router.get("/me/channels/sso/supported")
+async def sso_supported_channels(user: dict = Depends(_current_user)):
+    """Returns list of channels that support the SSO popup flow."""
+    return {
+        "configured": chatwoot_sso.is_configured(),
+        "channels": chatwoot_sso.supported_channels(),
+    }
+
+
+@api_router.post("/me/channels/sso/link")
+async def sso_generate_link(payload: SSOLinkRequest, user: dict = Depends(_current_user)):
+    """
+    Generate a one-time SSO popup URL for connecting `channel` via Chatwoot's UI.
+    The frontend opens this URL in window.open and polls /sso/inboxes for the
+    newly created inbox.
+    """
+    cw_user_id = user.get("chatwoot_user_id")
+    cw_account_id = user.get("chatwoot_account_id")
+    if not (cw_user_id and cw_account_id):
+        raise HTTPException(status_code=400, detail="chatwoot_account_missing")
+    try:
+        result = await chatwoot_sso.generate_sso_link(
+            chatwoot_user_id=int(cw_user_id),
+            chatwoot_account_id=int(cw_account_id),
+            channel=payload.channel,
+        )
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception("SSO link generation failed")
+        raise HTTPException(status_code=502, detail=f"sso_link_failed: {e}")
+
+
+@api_router.get("/me/channels/sso/inboxes")
+async def sso_list_inboxes(user: dict = Depends(_current_user)):
+    """
+    Lists all Chatwoot inboxes for the user's account.
+    Frontend polls this every 3s while the popup is open to detect when a
+    new inbox was just created (then closes the modal & shows success toast).
+    """
+    cw_account_id = user.get("chatwoot_account_id")
+    cw_token = user.get("chatwoot_access_token")
+    if not (cw_account_id and cw_token):
+        raise HTTPException(status_code=400, detail="chatwoot_account_missing")
+    try:
+        inboxes = await chatwoot_sso.list_user_inboxes(
+            chatwoot_account_id=int(cw_account_id),
+            chatwoot_user_token=cw_token,
+        )
+        return {"inboxes": [chatwoot_sso.normalize_inbox(i) for i in inboxes]}
+    except Exception as e:
+        logger.exception("SSO list_inboxes failed")
+        raise HTTPException(status_code=502, detail=f"list_inboxes_failed: {e}")
 
 
 @api_router.post("/me/channels/whatsapp/demo/simulate")

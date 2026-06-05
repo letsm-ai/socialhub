@@ -29,6 +29,7 @@ import {
   AlertTriangle,
   RefreshCw,
   Unlink,
+  Plug,
 } from "lucide-react";
 
 const PROVIDER_META = {
@@ -37,6 +38,18 @@ const PROVIDER_META = {
   facebook: { icon: Facebook, color: "bg-blue-600", brand: "Facebook Messenger" },
   email: { icon: Mail, color: "bg-amber-600", brand: "Email" },
   webchat: { icon: Globe, color: "bg-stone-700", brand: "Web Chat" },
+};
+
+const labelForChannel = (channel, lang) => {
+  const map = {
+    telegram: lang === "ar" ? "تيليجرام" : "Telegram",
+    facebook: lang === "ar" ? "فيسبوك ماسنجر" : "Facebook Messenger",
+    instagram: "Instagram",
+    whatsapp: "WhatsApp",
+    webchat: lang === "ar" ? "محادثة الموقع" : "Webchat",
+    email: lang === "ar" ? "البريد" : "Email",
+  };
+  return map[channel] || channel;
 };
 
 export default function Channels() {
@@ -61,6 +74,12 @@ export default function Channels() {
   const [byokSaving, setByokSaving] = useState(false);
   const [byokForm, setByokForm] = useState({ phone_number_id: "", waba_id: "", access_token: "" });
   const [byokError, setByokError] = useState("");
+
+  // Channel SSO state (Telegram POC + future FB/IG)
+  const [ssoModal, setSsoModal] = useState(null); // { channel, popup, baselineInboxIds }
+  const [ssoLoading, setSsoLoading] = useState(false);
+  const [ssoError, setSsoError] = useState("");
+  const [chatwootInboxes, setChatwootInboxes] = useState([]); // normalized inboxes from chatwoot
 
   useEffect(() => {
     isFacebookConfigured().then((b) => setMockMode(!b)).catch(() => setMockMode(true));
@@ -291,6 +310,82 @@ export default function Channels() {
     }
   };
 
+  // ---------- Channel SSO (Telegram POC) ----------
+  const startChannelSSO = async (channel) => {
+    setSsoError("");
+    setSsoLoading(true);
+    try {
+      // Snapshot existing inboxes BEFORE opening the popup so polling can
+      // detect "what was just added"
+      let baselineIds = [];
+      try {
+        const { data: snap } = await api.get("/me/channels/sso/inboxes");
+        baselineIds = (snap.inboxes || []).map((i) => i.id);
+      } catch (_) { /* ignore — first connect */ }
+
+      const { data } = await api.post("/me/channels/sso/link", { channel });
+      const popup = window.open(
+        data.url,
+        "chatwoot_sso",
+        "width=1100,height=780,resizable=yes,scrollbars=yes,noopener=no"
+      );
+      if (!popup) {
+        throw new Error(
+          lang === "ar"
+            ? "النافذة المنبثقة محجوبة من المتصفح — اسمح بالنوافذ المنبثقة ثم حاول مجدداً."
+            : "Popup blocked by browser — allow popups and retry."
+        );
+      }
+      setSsoModal({ channel, popup, baselineIds });
+    } catch (e) {
+      setSsoError(formatApiErrorDetail(e.response?.data?.detail) || e.message);
+    } finally {
+      setSsoLoading(false);
+    }
+  };
+
+  // Poll Chatwoot inboxes while the SSO popup is open; close on detection
+  useEffect(() => {
+    if (!ssoModal) return undefined;
+    const interval = setInterval(async () => {
+      // Stop if user closed the popup
+      if (ssoModal.popup && ssoModal.popup.closed) {
+        clearInterval(interval);
+        setSsoModal(null);
+        return;
+      }
+      try {
+        const { data } = await api.get("/me/channels/sso/inboxes");
+        const inboxes = data.inboxes || [];
+        setChatwootInboxes(inboxes);
+        const newOnes = inboxes.filter((i) => !ssoModal.baselineIds.includes(i.id));
+        if (newOnes.length > 0) {
+          // Match expected channel type — telegram → telegram, etc.
+          const expected = ssoModal.channel === "whatsapp_embedded" ? "whatsapp" : ssoModal.channel;
+          const matched = newOnes.find((i) => i.channel_type === expected) || newOnes[0];
+          clearInterval(interval);
+          try { ssoModal.popup && ssoModal.popup.close(); } catch (_) { /* ignore */ }
+          setSsoModal(null);
+          setToast(
+            lang === "ar"
+              ? `🎉 تم ربط ${labelForChannel(matched.channel_type, "ar")} بنجاح! (${matched.name || ""})`
+              : `🎉 ${labelForChannel(matched.channel_type, "en")} connected! (${matched.name || ""})`
+          );
+          setTimeout(() => setToast(""), 6000);
+        }
+      } catch (_) { /* keep polling silently */ }
+    }, 3000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ssoModal, lang]);
+
+  // Load existing chatwoot inboxes on mount (so "connected" badges show up)
+  useEffect(() => {
+    api.get("/me/channels/sso/inboxes").then(({ data }) => {
+      setChatwootInboxes(data.inboxes || []);
+    }).catch(() => { /* ignore */ });
+  }, []);
+
   return (
     <div className="space-y-6" data-testid="channels-page">
       <div>
@@ -344,6 +439,33 @@ export default function Channels() {
         />
       ) : (
         <WhatsAppByokConnectCard onConnect={openByokModal} lang={lang} />
+      )}
+
+      {/* Telegram — SSO Popup (POC for hybrid channel-connect flow) */}
+      <TelegramChannelCard
+        connected={chatwootInboxes.some((i) => i.channel_type === "telegram")}
+        existingInbox={chatwootInboxes.find((i) => i.channel_type === "telegram")}
+        onConnect={() => startChannelSSO("telegram")}
+        loading={ssoLoading && ssoModal?.channel === "telegram"}
+        lang={lang}
+      />
+
+      {ssoError && (
+        <div data-testid="sso-error" className="bg-red-50 border border-red-200 rounded-2xl p-4 text-sm text-red-800 flex items-start gap-2">
+          <X size={16} className="text-red-600 mt-0.5 flex-shrink-0" />
+          {ssoError}
+        </div>
+      )}
+
+      {ssoModal && (
+        <ChannelSSOPollingOverlay
+          channel={ssoModal.channel}
+          onCancel={() => {
+            try { ssoModal.popup && ssoModal.popup.close(); } catch (_) { /* ignore */ }
+            setSsoModal(null);
+          }}
+          lang={lang}
+        />
       )}
 
       {/* Coming-soon cards: Embedded Signup + QR Lite */}
@@ -1154,3 +1276,136 @@ const ChannelComingSoonCard = ({ icon, title, subtitle, badge, lang }) => (
     </CardContent>
   </Card>
 );
+
+/* ------------------------------------------------------------------ */
+/* Telegram channel card — SSO popup connect                           */
+/* ------------------------------------------------------------------ */
+const TelegramChannelCard = ({ connected, existingInbox, onConnect, loading, lang }) => {
+  if (connected) {
+    return (
+      <Card data-testid="telegram-connected-card" className="rounded-3xl border-sky-200 bg-white">
+        <CardContent className="p-6 flex flex-col md:flex-row md:items-center gap-4">
+          <div className="w-14 h-14 rounded-2xl bg-sky-50 border border-sky-200 flex items-center justify-center flex-shrink-0">
+            <Send size={26} className="text-sky-700" />
+          </div>
+          <div className="flex-1">
+            <div className="flex items-center gap-2 mb-1 flex-wrap">
+              <p className="font-semibold text-stone-900">
+                {lang === "ar" ? "تيليجرام — متصل" : "Telegram — Connected"}
+              </p>
+              <Badge className="bg-sky-700 text-white hover:bg-sky-700 text-[10px]">
+                {lang === "ar" ? "نشط" : "ACTIVE"}
+              </Badge>
+            </div>
+            <p className="text-stone-500 text-xs">
+              {lang === "ar" ? "البوت:" : "Bot:"} <code className="font-mono text-stone-800">{existingInbox?.name || "—"}</code>
+            </p>
+          </div>
+          <Badge variant="outline" className="text-[10px] border-stone-300 bg-stone-50 text-stone-600">
+            {lang === "ar" ? "إدارة من Chatwoot" : "Managed in Chatwoot"}
+          </Badge>
+        </CardContent>
+      </Card>
+    );
+  }
+  return (
+    <Card data-testid="telegram-connect-card" className="rounded-3xl border-sky-200 bg-sky-50/30">
+      <CardContent className="p-7 md:p-8 space-y-5">
+        <div className="flex items-start gap-4">
+          <div className="w-14 h-14 rounded-2xl bg-sky-100 border border-sky-200 flex items-center justify-center flex-shrink-0">
+            <Send size={28} className="text-sky-700" />
+          </div>
+          <div className="flex-1">
+            <div className="flex flex-wrap items-center gap-2 mb-1">
+              <h2 className="font-heading text-xl md:text-2xl font-bold text-stone-900">
+                {lang === "ar" ? "اربط بوت تيليجرام" : "Connect a Telegram bot"}
+              </h2>
+              <Badge variant="outline" className="text-[10px] border-sky-300 bg-sky-100 text-sky-900">
+                {lang === "ar" ? "جديد · ٣٠ ثانية" : "New · 30 seconds"}
+              </Badge>
+            </div>
+            <p className="text-stone-700 text-sm leading-relaxed">
+              {lang === "ar"
+                ? "اربط بوت Telegram عبر نافذة سريعة — ندخلك تلقائياً إلى صفحة الربط، تلصق Token من BotFather، وننتهي."
+                : "Connect a Telegram bot through a quick popup — we log you in automatically, you paste the BotFather token, and we're done."}
+            </p>
+          </div>
+        </div>
+
+        <div className="rounded-2xl bg-white border border-stone-200 p-4 space-y-2">
+          <p className="text-xs font-semibold text-stone-700">
+            {lang === "ar" ? "خطوات سريعة:" : "Quick steps:"}
+          </p>
+          <ol className="text-xs text-stone-600 space-y-1 list-decimal ms-5">
+            <li>
+              {lang === "ar"
+                ? <>افتح <a href="https://t.me/BotFather" target="_blank" rel="noreferrer" className="text-sky-700 hover:underline inline-flex items-center gap-1">@BotFather <ExternalLink size={10} /></a> في تيليجرام واطلب <code className="font-mono bg-stone-100 px-1 rounded">/newbot</code></>
+                : <>Open <a href="https://t.me/BotFather" target="_blank" rel="noreferrer" className="text-sky-700 hover:underline inline-flex items-center gap-1">@BotFather <ExternalLink size={10} /></a> in Telegram and send <code className="font-mono bg-stone-100 px-1 rounded">/newbot</code></>}
+            </li>
+            <li>{lang === "ar" ? "احفظ الـ Bot Token (يبدأ بأرقام:حروف)" : "Save the Bot Token (looks like 123:ABC...)"}</li>
+            <li>{lang === "ar" ? "اضغط الزر أدناه والصق الـ Token" : "Click below and paste the Token"}</li>
+          </ol>
+        </div>
+
+        <Button
+          data-testid="connect-telegram-btn"
+          onClick={onConnect}
+          disabled={loading}
+          className="bg-sky-700 hover:bg-sky-800 text-white rounded-xl h-12 px-6"
+        >
+          {loading ? (
+            <Loader2 className="animate-spin me-2" size={16} />
+          ) : (
+            <Plug className="me-2" size={16} />
+          )}
+          {lang === "ar" ? "اربط الآن" : "Connect now"}
+        </Button>
+      </CardContent>
+    </Card>
+  );
+};
+
+/* ------------------------------------------------------------------ */
+/* SSO Polling Overlay — shown while popup is open                     */
+/* ------------------------------------------------------------------ */
+const ChannelSSOPollingOverlay = ({ channel, onCancel, lang }) => (
+  <div
+    data-testid="sso-polling-overlay"
+    className="fixed inset-0 z-50 bg-stone-900/70 backdrop-blur-sm flex items-center justify-center p-4"
+  >
+    <div className="bg-white rounded-3xl max-w-md w-full p-7 space-y-5 relative">
+      <div className="flex items-center justify-center w-16 h-16 mx-auto rounded-full bg-sky-100 border border-sky-200">
+        <Loader2 size={32} className="text-sky-700 animate-spin" />
+      </div>
+      <div className="text-center">
+        <h3 className="font-heading text-xl font-bold text-stone-900 mb-2">
+          {lang === "ar"
+            ? `أكمل ربط ${labelForChannel(channel, "ar")} في النافذة المنبثقة`
+            : `Finish ${labelForChannel(channel, "en")} setup in the popup window`}
+        </h3>
+        <p className="text-sm text-stone-600 leading-relaxed">
+          {lang === "ar"
+            ? "نراقب الاتصال تلقائياً — بمجرد ما تنتهي، سنغلق النافذة وتظهر القناة هنا."
+            : "We're watching the connection automatically — once you finish, we'll close the popup and the channel will appear here."}
+        </p>
+      </div>
+      <div className="rounded-2xl bg-stone-50 border border-stone-200 p-4 text-xs text-stone-600 space-y-1">
+        <p>{lang === "ar" ? "💡 نصيحة:" : "💡 Tip:"}</p>
+        <p>
+          {lang === "ar"
+            ? "لو لم تظهر النافذة، فهي محجوبة من المتصفح. ابحث عن أيقونة 🔒 في شريط العنوان واسمح بالنوافذ المنبثقة."
+            : "If the popup didn't open, your browser blocked it. Look for the 🔒 icon in the address bar and allow popups."}
+        </p>
+      </div>
+      <Button
+        data-testid="sso-cancel-btn"
+        onClick={onCancel}
+        variant="outline"
+        className="w-full rounded-xl h-11"
+      >
+        {lang === "ar" ? "إلغاء" : "Cancel"}
+      </Button>
+    </div>
+  </div>
+);
+

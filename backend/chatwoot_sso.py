@@ -38,10 +38,17 @@ _CHANNEL_PATHS: Dict[str, str] = {
 
 
 def _platform_token() -> str:
-    t = (os.environ.get("CHATWOOT_PLATFORM_TOKEN") or "").strip()
+    # Accept either the new `CHATWOOT_PLATFORM_TOKEN` or the legacy
+    # `CHATWOOT_PLATFORM_API_KEY` already used by chatwoot_client.py.
+    t = (
+        os.environ.get("CHATWOOT_PLATFORM_TOKEN")
+        or os.environ.get("CHATWOOT_PLATFORM_API_KEY")
+        or ""
+    ).strip()
     if not t:
         raise RuntimeError(
-            "CHATWOOT_PLATFORM_TOKEN not configured — create one in Chatwoot Super Admin"
+            "CHATWOOT_PLATFORM_TOKEN (or CHATWOOT_PLATFORM_API_KEY) not configured — "
+            "create one in Chatwoot Super Admin → Platform Apps"
         )
     return t
 
@@ -55,7 +62,10 @@ def _chatwoot_base() -> str:
 
 def is_configured() -> bool:
     return bool(
-        (os.environ.get("CHATWOOT_PLATFORM_TOKEN") or "").strip()
+        (
+            (os.environ.get("CHATWOOT_PLATFORM_TOKEN") or "").strip()
+            or (os.environ.get("CHATWOOT_PLATFORM_API_KEY") or "").strip()
+        )
         and (os.environ.get("CHATWOOT_URL") or "").strip()
     )
 
