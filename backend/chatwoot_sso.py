@@ -160,3 +160,57 @@ def normalize_inbox(inbox: Dict[str, Any]) -> Dict[str, Any]:
         "website_url": inbox.get("website_url"),
         "created_at": inbox.get("created_at"),
     }
+
+
+async def find_user_by_email_brute_force(
+    email: str, *, max_id: int = 200,
+) -> Optional[Dict[str, Any]]:
+    """
+    Chatwoot's Platform API lacks a `list_users` or `find_by_email` endpoint.
+    This brute-force walks `GET /platform/api/v1/users/{id}` from 1..max_id
+    until it finds a match or exhausts the range.
+
+    Used by the self-healing SSO endpoint to repair MongoDB records whose
+    stored chatwoot_user_id is stale (e.g. after a Chatwoot DB restore).
+    Returns the user JSON (incl. access_token + accounts) or None.
+    """
+    base = _chatwoot_base()
+    token = _platform_token()
+    target = email.lower().strip()
+    async with httpx.AsyncClient(timeout=8.0) as cx:
+        for uid in range(1, max_id + 1):
+            try:
+                r = await cx.get(
+                    f"{base}/platform/api/v1/users/{uid}",
+                    headers={"api_access_token": token},
+                )
+            except Exception:
+                continue
+            if r.status_code == 404:
+                continue
+            if r.status_code >= 400:
+                continue
+            try:
+                data = r.json()
+            except Exception:
+                continue
+            if (data.get("email") or "").lower().strip() == target:
+                logger.info("[SSO] Self-heal: email=%s found at chatwoot_user_id=%s", email, uid)
+                return data
+    return None
+
+
+async def get_user_account_ids(chatwoot_user_id: int) -> list[int]:
+    """Returns list of account IDs the user is a member of (via Platform API)."""
+    base = _chatwoot_base()
+    token = _platform_token()
+    async with httpx.AsyncClient(timeout=10.0) as cx:
+        r = await cx.get(
+            f"{base}/platform/api/v1/users/{chatwoot_user_id}",
+            headers={"api_access_token": token},
+        )
+        if r.status_code >= 400:
+            return []
+        data = r.json() or {}
+        accounts = data.get("accounts") or []
+        return [a.get("id") for a in accounts if a.get("id")]

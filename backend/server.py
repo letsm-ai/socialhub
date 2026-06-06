@@ -1073,17 +1073,84 @@ async def sso_generate_link(payload: SSOLinkRequest, user: dict = Depends(_curre
     Generate a one-time SSO popup URL for connecting `channel` via Chatwoot's UI.
     The frontend opens this URL in window.open and polls /sso/inboxes for the
     newly created inbox.
+
+    Self-healing: if the stored chatwoot_user_id is stale (e.g. after a
+    Chatwoot DB restore), we brute-force-find the user by email and fix MongoDB.
     """
     cw_user_id = user.get("chatwoot_user_id")
     cw_account_id = user.get("chatwoot_account_id")
+    user_email = (user.get("email") or "").strip()
+
+    # ---- Self-heal stale Chatwoot IDs ----
+    needs_heal = False
+    if not (cw_user_id and cw_account_id):
+        needs_heal = True
+    else:
+        # Verify stored user_id still resolves AND matches our email
+        try:
+            existing = await chatwoot_client.get_user(int(cw_user_id))
+            if (existing.get("email") or "").lower().strip() != user_email.lower():
+                logger.warning(
+                    "[SSO] stored cw_user_id=%s belongs to %s, expected %s — healing",
+                    cw_user_id, existing.get("email"), user_email,
+                )
+                needs_heal = True
+        except Exception as e:
+            logger.warning("[SSO] stored cw_user_id=%s lookup failed: %s — healing", cw_user_id, e)
+            needs_heal = True
+
+    if needs_heal and user_email:
+        logger.info("[SSO] Attempting self-heal for %s", user_email)
+        found = await chatwoot_sso.find_user_by_email_brute_force(user_email)
+        if found:
+            new_uid = found.get("id")
+            account_ids = await chatwoot_sso.get_user_account_ids(new_uid)
+            new_aid = account_ids[0] if account_ids else None
+            new_token = found.get("access_token") or ""
+            update = {"chatwoot_user_id": new_uid}
+            if new_aid:
+                update["chatwoot_account_id"] = new_aid
+            if new_token:
+                update["chatwoot_access_token"] = new_token
+            await db.users.update_one({"id": user["id"]}, {"$set": update})
+            cw_user_id = new_uid
+            cw_account_id = new_aid or cw_account_id
+            logger.info(
+                "[SSO] Self-heal SUCCESS for %s: user_id=%s account_id=%s",
+                user_email, cw_user_id, cw_account_id,
+            )
+        else:
+            # Last resort: try to re-provision a fresh Chatwoot account
+            try:
+                logger.info("[SSO] Self-heal: re-provisioning %s in Chatwoot", user_email)
+                fresh = await chatwoot_client.provision_for_user(user)
+                cw_user_id = fresh["user_id"]
+                cw_account_id = fresh["account_id"]
+                await db.users.update_one({"id": user["id"]}, {"$set": {
+                    "chatwoot_user_id": cw_user_id,
+                    "chatwoot_account_id": cw_account_id,
+                    "chatwoot_access_token": fresh.get("access_token", ""),
+                }})
+            except Exception as e:
+                logger.exception("[SSO] re-provision failed for %s", user_email)
+                raise HTTPException(
+                    status_code=502,
+                    detail=(
+                        f"chatwoot_account_unrecoverable: stored user_id={user.get('chatwoot_user_id')} "
+                        f"doesn't match Chatwoot, brute-force search failed, and re-provisioning errored: {e}"
+                    ),
+                )
+
     if not (cw_user_id and cw_account_id):
         raise HTTPException(status_code=400, detail="chatwoot_account_missing")
+
     try:
         result = await chatwoot_sso.generate_sso_link(
             chatwoot_user_id=int(cw_user_id),
             chatwoot_account_id=int(cw_account_id),
             channel=payload.channel,
         )
+        result["healed"] = needs_heal
         return result
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -1098,20 +1165,51 @@ async def sso_list_inboxes(user: dict = Depends(_current_user)):
     Lists all Chatwoot inboxes for the user's account.
     Frontend polls this every 3s while the popup is open to detect when a
     new inbox was just created (then closes the modal & shows success toast).
+
+    Self-heals stale chatwoot_access_token by re-fetching it via Platform API
+    when the user record points to outdated IDs.
     """
     cw_account_id = user.get("chatwoot_account_id")
     cw_token = user.get("chatwoot_access_token")
+    cw_user_id = user.get("chatwoot_user_id")
+    user_email = (user.get("email") or "").strip()
+
+    # If token is missing OR account_id is missing, try to recover via brute-force lookup
+    if not (cw_account_id and cw_token) and user_email:
+        found = await chatwoot_sso.find_user_by_email_brute_force(user_email)
+        if found:
+            new_uid = found.get("id")
+            new_token = found.get("access_token") or ""
+            account_ids = await chatwoot_sso.get_user_account_ids(new_uid)
+            new_aid = account_ids[0] if account_ids else None
+            update = {}
+            if new_uid:
+                update["chatwoot_user_id"] = new_uid
+            if new_token:
+                update["chatwoot_access_token"] = new_token
+            if new_aid:
+                update["chatwoot_account_id"] = new_aid
+            if update:
+                await db.users.update_one({"id": user["id"]}, {"$set": update})
+            cw_user_id = new_uid or cw_user_id
+            cw_token = new_token or cw_token
+            cw_account_id = new_aid or cw_account_id
+
     if not (cw_account_id and cw_token):
-        raise HTTPException(status_code=400, detail="chatwoot_account_missing")
+        # Return empty list silently — polling can keep going until user finishes
+        return {"inboxes": [], "ready": False}
     try:
         inboxes = await chatwoot_sso.list_user_inboxes(
             chatwoot_account_id=int(cw_account_id),
             chatwoot_user_token=cw_token,
         )
-        return {"inboxes": [chatwoot_sso.normalize_inbox(i) for i in inboxes]}
+        return {
+            "inboxes": [chatwoot_sso.normalize_inbox(i) for i in inboxes],
+            "ready": True,
+        }
     except Exception as e:
-        logger.exception("SSO list_inboxes failed")
-        raise HTTPException(status_code=502, detail=f"list_inboxes_failed: {e}")
+        logger.warning("SSO list_inboxes failed: %s", e)
+        return {"inboxes": [], "ready": False, "error": str(e)}
 
 
 @api_router.post("/me/channels/whatsapp/demo/simulate")
