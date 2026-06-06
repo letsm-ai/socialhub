@@ -35,7 +35,8 @@ async def verify_credentials(
     phone_number_id: str, access_token: str
 ) -> Dict[str, Any]:
     """Calls Meta Graph to confirm the phone_number_id + token are valid and
-    returns the phone number's display info. Raises on failure."""
+    returns the phone number's display info. Raises on failure with a
+    human-friendly message that distinguishes between expired/invalid tokens."""
     async with httpx.AsyncClient(timeout=15.0) as cx:
         r = await cx.get(
             f"{META_GRAPH}/{phone_number_id}",
@@ -45,7 +46,36 @@ async def verify_credentials(
             },
         )
         if r.status_code >= 400:
-            raise ValueError(f"meta_verify_failed [{r.status_code}]: {r.text[:300]}")
+            # Parse Meta's structured error to map to friendlier messages
+            try:
+                err = r.json().get("error", {})
+                code = err.get("code")
+                sub = err.get("error_subcode")
+                meta_msg = err.get("message", "")
+            except Exception:
+                code, sub, meta_msg = None, None, r.text[:200]
+            # 190 = OAuthException, sub 463 = expired session
+            if code == 190 and sub == 463:
+                raise ValueError(
+                    "token_expired: Session expired. The token you pasted is a "
+                    "TEMPORARY token (24h validity). You need a PERMANENT System "
+                    "User token. Steps: Meta Business Manager → Business Settings "
+                    "→ Users → System Users → Create → Generate token with "
+                    "'whatsapp_business_management' + 'whatsapp_business_messaging' "
+                    "permissions → Set 'Never' expiry."
+                )
+            if code == 190:
+                raise ValueError(
+                    f"invalid_access_token: {meta_msg}. Re-copy the token from Meta "
+                    "Business Manager and make sure no spaces or line breaks."
+                )
+            if code == 100 and "phone_number_id" in meta_msg.lower():
+                raise ValueError(
+                    "invalid_phone_number_id: The Phone Number ID you pasted "
+                    "doesn't match the token's account. Copy both from the same "
+                    "WhatsApp app in Meta Business Manager."
+                )
+            raise ValueError(f"meta_verify_failed [{r.status_code}]: {meta_msg}")
         return r.json()
 
 
