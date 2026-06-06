@@ -103,13 +103,14 @@ async def generate_sso_link(
     if not sso_url:
         raise RuntimeError("sso_url_missing_in_response")
 
-    # Append the per-channel redirect_to so the user lands directly inside the
+    # Append the per-channel redirect_url so the user lands directly inside the
     # right inbox-creation page after Chatwoot consumes the SSO token.
+    # NOTE: Chatwoot expects `redirect_url` (not `redirect_to`) — confused us once.
     redirect_path = (
         f"/app/accounts/{chatwoot_account_id}{_CHANNEL_PATHS[channel]}"
     )
     sep = "&" if "?" in sso_url else "?"
-    final_url = f"{sso_url}{sep}redirect_to={quote(redirect_path, safe='')}"
+    final_url = f"{sso_url}{sep}redirect_url={quote(redirect_path, safe='')}"
     logger.info(
         "[SSO] generated link channel=%s cw_user=%s cw_account=%s",
         channel, chatwoot_user_id, chatwoot_account_id,

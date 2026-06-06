@@ -21,9 +21,18 @@ def _base() -> str:
 
 
 def _headers() -> dict:
+    # Prefer the new `CHATWOOT_PLATFORM_TOKEN` (current Platform App) — fall back
+    # to legacy `CHATWOOT_PLATFORM_API_KEY` for backwards compatibility.
+    token = (
+        os.environ.get("CHATWOOT_PLATFORM_TOKEN")
+        or os.environ.get("CHATWOOT_PLATFORM_API_KEY")
+        or ""
+    ).strip()
+    if not token:
+        raise ChatwootError("CHATWOOT_PLATFORM_TOKEN (or CHATWOOT_PLATFORM_API_KEY) not configured")
     return {
         "Content-Type": "application/json",
-        "api_access_token": os.environ["CHATWOOT_PLATFORM_API_KEY"],
+        "api_access_token": token,
     }
 
 
