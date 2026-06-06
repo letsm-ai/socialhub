@@ -210,6 +210,34 @@ async def create_api_inbox(account_id: int, user_token: str, name: str, webhook_
         return r.json()
 
 
+async def create_telegram_inbox(account_id: int, user_token: str, bot_token: str, name: str = "") -> dict:
+    """POST /api/v1/accounts/{aid}/inboxes — creates a Telegram channel inbox.
+    Chatwoot will call BotFather's API behind the scenes to set up the webhook."""
+    payload = {
+        "name": name or "Telegram",
+        "channel": {"type": "telegram", "bot_token": bot_token.strip()},
+    }
+    async with httpx.AsyncClient(timeout=25.0) as cx:
+        r = await cx.post(
+            f"{_base()}/api/v1/accounts/{account_id}/inboxes",
+            headers=_app_headers(user_token),
+            json=payload,
+        )
+        if r.status_code >= 400:
+            raise ChatwootError(f"create_telegram_inbox {r.status_code}: {r.text}")
+        return r.json()
+
+
+async def delete_inbox(account_id: int, user_token: str, inbox_id: int) -> None:
+    async with httpx.AsyncClient(timeout=15.0) as cx:
+        r = await cx.delete(
+            f"{_base()}/api/v1/accounts/{account_id}/inboxes/{inbox_id}",
+            headers=_app_headers(user_token),
+        )
+        if r.status_code >= 400 and r.status_code != 404:
+            raise ChatwootError(f"delete_inbox {r.status_code}: {r.text}")
+
+
 async def create_contact(account_id: int, user_token: str, inbox_id: int, name: str, phone: str) -> dict:
     """POST /api/v1/accounts/{aid}/contacts — creates a contact (also assigns to inbox)."""
     payload = {

@@ -441,12 +441,48 @@ export default function Channels() {
         <WhatsAppByokConnectCard onConnect={openByokModal} lang={lang} />
       )}
 
-      {/* Telegram — SSO Popup (POC for hybrid channel-connect flow) */}
+      {/* Telegram — Native connect (paste Bot Token directly, no popup) */}
       <TelegramChannelCard
         connected={chatwootInboxes.some((i) => i.channel_type === "telegram")}
         existingInbox={chatwootInboxes.find((i) => i.channel_type === "telegram")}
-        onConnect={() => startChannelSSO("telegram")}
-        loading={ssoLoading && ssoModal?.channel === "telegram"}
+        onConnect={async (botToken) => {
+          setError("");
+          try {
+            const { data } = await api.post("/me/channels/telegram/connect", {
+              bot_token: botToken,
+              name: "Telegram",
+            });
+            // Refresh inbox list to reflect the new connection
+            const { data: inb } = await api.get("/me/channels/sso/inboxes");
+            setChatwootInboxes(inb.inboxes || []);
+            setToast(
+              lang === "ar"
+                ? `🎉 تم ربط Telegram بنجاح! (${data.inbox?.name || ""})`
+                : `🎉 Telegram connected! (${data.inbox?.name || ""})`
+            );
+            setTimeout(() => setToast(""), 6000);
+            return { ok: true };
+          } catch (e) {
+            const detail = formatApiErrorDetail(e.response?.data?.detail) || e.message;
+            return { ok: false, error: detail };
+          }
+        }}
+        onDisconnect={async (inboxId) => {
+          if (!window.confirm(
+            lang === "ar"
+              ? "سيتم فصل بوت تيليجرام. هل أنت متأكد؟"
+              : "Disconnect Telegram bot. Continue?"
+          )) return;
+          try {
+            await api.delete(`/me/channels/telegram/${inboxId}`);
+            const { data: inb } = await api.get("/me/channels/sso/inboxes");
+            setChatwootInboxes(inb.inboxes || []);
+            setToast(lang === "ar" ? "تم فصل تيليجرام." : "Telegram disconnected.");
+            setTimeout(() => setToast(""), 3000);
+          } catch (e) {
+            setError(formatApiErrorDetail(e.response?.data?.detail) || e.message);
+          }
+        }}
         lang={lang}
       />
 
@@ -1278,10 +1314,15 @@ const ChannelComingSoonCard = ({ icon, title, subtitle, badge, lang }) => (
 );
 
 /* ------------------------------------------------------------------ */
-/* Telegram channel card — SSO popup connect                           */
+/* Telegram channel card — native connect (paste BotFather token)      */
 /* ------------------------------------------------------------------ */
-const TelegramChannelCard = ({ connected, existingInbox, onConnect, loading, lang }) => {
-  if (connected) {
+const TelegramChannelCard = ({ connected, existingInbox, onConnect, onDisconnect, lang }) => {
+  const [showForm, setShowForm] = useState(false);
+  const [botToken, setBotToken] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+
+  if (connected && existingInbox) {
     return (
       <Card data-testid="telegram-connected-card" className="rounded-3xl border-sky-200 bg-white">
         <CardContent className="p-6 flex flex-col md:flex-row md:items-center gap-4">
@@ -1298,16 +1339,58 @@ const TelegramChannelCard = ({ connected, existingInbox, onConnect, loading, lan
               </Badge>
             </div>
             <p className="text-stone-500 text-xs">
-              {lang === "ar" ? "البوت:" : "Bot:"} <code className="font-mono text-stone-800">{existingInbox?.name || "—"}</code>
+              {lang === "ar" ? "البوت:" : "Bot:"}{" "}
+              <code className="font-mono text-stone-800">{existingInbox?.name || "—"}</code>
             </p>
           </div>
-          <Badge variant="outline" className="text-[10px] border-stone-300 bg-stone-50 text-stone-600">
-            {lang === "ar" ? "إدارة من Chatwoot" : "Managed in Chatwoot"}
-          </Badge>
+          <Button
+            data-testid="disconnect-telegram-btn"
+            onClick={() => onDisconnect(existingInbox.id)}
+            variant="outline"
+            className="rounded-xl h-10 text-red-700 border-red-200 hover:bg-red-50"
+          >
+            <Unlink size={14} className="me-2" />
+            {lang === "ar" ? "فصل" : "Disconnect"}
+          </Button>
         </CardContent>
       </Card>
     );
   }
+
+  const handleSubmit = async () => {
+    setError("");
+    const trimmed = botToken.trim();
+    if (!trimmed) {
+      setError(lang === "ar" ? "أدخل الـ Bot Token" : "Enter the Bot Token");
+      return;
+    }
+    if (!trimmed.includes(":")) {
+      setError(
+        lang === "ar"
+          ? "صيغة غير صحيحة. التوكن يبدو هكذا: 1234567:ABC..."
+          : "Invalid format. Token looks like: 1234567:ABC..."
+      );
+      return;
+    }
+    setSubmitting(true);
+    const res = await onConnect(trimmed);
+    setSubmitting(false);
+    if (res?.ok) {
+      setBotToken("");
+      setShowForm(false);
+    } else {
+      // Map common errors to clearer messages
+      const e = res?.error || "";
+      if (e.includes("invalid_bot_token")) {
+        setError(lang === "ar" ? "التوكن غير صحيح — تأكد من نسخه كاملاً من BotFather" : "Invalid token — re-check it on BotFather");
+      } else if (e.includes("bot_already_connected")) {
+        setError(lang === "ar" ? "هذا البوت مربوط مسبقاً" : "This bot is already connected");
+      } else {
+        setError(e);
+      }
+    }
+  };
+
   return (
     <Card data-testid="telegram-connect-card" className="rounded-3xl border-sky-200 bg-sky-50/30">
       <CardContent className="p-7 md:p-8 space-y-5">
@@ -1321,45 +1404,93 @@ const TelegramChannelCard = ({ connected, existingInbox, onConnect, loading, lan
                 {lang === "ar" ? "اربط بوت تيليجرام" : "Connect a Telegram bot"}
               </h2>
               <Badge variant="outline" className="text-[10px] border-sky-300 bg-sky-100 text-sky-900">
-                {lang === "ar" ? "جديد · ٣٠ ثانية" : "New · 30 seconds"}
+                {lang === "ar" ? "بسيط · توكن واحد" : "Simple · 1 token"}
               </Badge>
             </div>
             <p className="text-stone-700 text-sm leading-relaxed">
               {lang === "ar"
-                ? "اربط بوت Telegram عبر نافذة سريعة — ندخلك تلقائياً إلى صفحة الربط، تلصق Token من BotFather، وننتهي."
-                : "Connect a Telegram bot through a quick popup — we log you in automatically, you paste the BotFather token, and we're done."}
+                ? "ألصق Bot Token من BotFather وسنربط البوت بحسابك في ثوانٍ."
+                : "Paste your BotFather token and we'll connect the bot in seconds."}
             </p>
           </div>
         </div>
 
-        <div className="rounded-2xl bg-white border border-stone-200 p-4 space-y-2">
-          <p className="text-xs font-semibold text-stone-700">
-            {lang === "ar" ? "خطوات سريعة:" : "Quick steps:"}
-          </p>
-          <ol className="text-xs text-stone-600 space-y-1 list-decimal ms-5">
-            <li>
-              {lang === "ar"
-                ? <>افتح <a href="https://t.me/BotFather" target="_blank" rel="noreferrer" className="text-sky-700 hover:underline inline-flex items-center gap-1">@BotFather <ExternalLink size={10} /></a> في تيليجرام واطلب <code className="font-mono bg-stone-100 px-1 rounded">/newbot</code></>
-                : <>Open <a href="https://t.me/BotFather" target="_blank" rel="noreferrer" className="text-sky-700 hover:underline inline-flex items-center gap-1">@BotFather <ExternalLink size={10} /></a> in Telegram and send <code className="font-mono bg-stone-100 px-1 rounded">/newbot</code></>}
-            </li>
-            <li>{lang === "ar" ? "احفظ الـ Bot Token (يبدأ بأرقام:حروف)" : "Save the Bot Token (looks like 123:ABC...)"}</li>
-            <li>{lang === "ar" ? "اضغط الزر أدناه والصق الـ Token" : "Click below and paste the Token"}</li>
-          </ol>
-        </div>
-
-        <Button
-          data-testid="connect-telegram-btn"
-          onClick={onConnect}
-          disabled={loading}
-          className="bg-sky-700 hover:bg-sky-800 text-white rounded-xl h-12 px-6"
-        >
-          {loading ? (
-            <Loader2 className="animate-spin me-2" size={16} />
-          ) : (
-            <Plug className="me-2" size={16} />
-          )}
-          {lang === "ar" ? "اربط الآن" : "Connect now"}
-        </Button>
+        {!showForm ? (
+          <>
+            <div className="rounded-2xl bg-white border border-stone-200 p-4 space-y-2">
+              <p className="text-xs font-semibold text-stone-700">
+                {lang === "ar" ? "خطوات سريعة:" : "Quick steps:"}
+              </p>
+              <ol className="text-xs text-stone-600 space-y-1 list-decimal ms-5">
+                <li>
+                  {lang === "ar" ? (
+                    <>افتح <a href="https://t.me/BotFather" target="_blank" rel="noreferrer" className="text-sky-700 hover:underline inline-flex items-center gap-1">@BotFather <ExternalLink size={10} /></a> في تيليجرام واطلب <code className="font-mono bg-stone-100 px-1 rounded">/newbot</code></>
+                  ) : (
+                    <>Open <a href="https://t.me/BotFather" target="_blank" rel="noreferrer" className="text-sky-700 hover:underline inline-flex items-center gap-1">@BotFather <ExternalLink size={10} /></a> in Telegram and send <code className="font-mono bg-stone-100 px-1 rounded">/newbot</code></>
+                  )}
+                </li>
+                <li>{lang === "ar" ? "احفظ الـ Bot Token (يبدأ بأرقام:حروف)" : "Save the Bot Token (looks like 123:ABC...)"}</li>
+                <li>{lang === "ar" ? "اضغط الزر أدناه والصق الـ Token" : "Click below and paste the Token"}</li>
+              </ol>
+            </div>
+            <Button
+              data-testid="open-telegram-form-btn"
+              onClick={() => setShowForm(true)}
+              className="bg-sky-700 hover:bg-sky-800 text-white rounded-xl h-12 px-6"
+            >
+              <Plug className="me-2" size={16} />
+              {lang === "ar" ? "ابدأ الربط" : "Start connection"}
+            </Button>
+          </>
+        ) : (
+          <div className="rounded-2xl bg-white border border-stone-200 p-5 space-y-4">
+            <div>
+              <label className="text-sm font-semibold text-stone-800 block mb-2">
+                {lang === "ar" ? "Bot Token من BotFather" : "Bot Token from BotFather"}
+              </label>
+              <input
+                data-testid="telegram-bot-token-input"
+                type="text"
+                value={botToken}
+                onChange={(e) => setBotToken(e.target.value)}
+                placeholder="1234567:ABCdef..."
+                className="w-full px-4 py-3 rounded-xl border border-stone-300 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
+                dir="ltr"
+                autoFocus
+              />
+              <p className="text-xs text-stone-500 mt-2">
+                {lang === "ar"
+                  ? "التوكن مكون من أرقام : حروف ورموز (~ 45 حرف)"
+                  : "The token is digits : letters and symbols (~ 45 chars)"}
+              </p>
+            </div>
+            {error && (
+              <div data-testid="telegram-form-error" className="bg-red-50 border border-red-200 rounded-xl p-3 text-sm text-red-800 flex items-start gap-2">
+                <X size={14} className="text-red-600 mt-0.5 flex-shrink-0" />
+                {error}
+              </div>
+            )}
+            <div className="flex gap-3">
+              <Button
+                data-testid="submit-telegram-btn"
+                onClick={handleSubmit}
+                disabled={submitting}
+                className="bg-sky-700 hover:bg-sky-800 text-white rounded-xl h-11 px-6 flex-1"
+              >
+                {submitting ? <Loader2 className="animate-spin me-2" size={16} /> : <Check className="me-2" size={16} />}
+                {lang === "ar" ? "ربط البوت" : "Connect bot"}
+              </Button>
+              <Button
+                data-testid="cancel-telegram-btn"
+                onClick={() => { setShowForm(false); setBotToken(""); setError(""); }}
+                variant="outline"
+                className="rounded-xl h-11"
+              >
+                {lang === "ar" ? "إلغاء" : "Cancel"}
+              </Button>
+            </div>
+          </div>
+        )}
       </CardContent>
     </Card>
   );

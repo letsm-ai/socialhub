@@ -1051,6 +1051,117 @@ async def disconnect_whatsapp(user: dict = Depends(_current_user)):
 
 
 # ============================
+# Telegram — Direct Connect (no SSO, no popup)
+# Client pastes Bot Token in SocialHub UI → backend creates inbox in Chatwoot
+# ============================
+class TelegramConnectRequest(BaseModel):
+    bot_token: str
+    name: str = "Telegram"
+
+
+async def _ensure_chatwoot_link(user: dict) -> dict:
+    """
+    Helper: makes sure user has a valid chatwoot_user_id + access_token + account_id.
+    Returns updated dict with these fields. Self-heals if stored values are stale.
+    """
+    cw_user_id = user.get("chatwoot_user_id")
+    cw_account_id = user.get("chatwoot_account_id")
+    cw_token = user.get("chatwoot_access_token")
+    user_email = (user.get("email") or "").strip()
+
+    needs_heal = not (cw_user_id and cw_account_id and cw_token)
+    if not needs_heal:
+        try:
+            existing = await chatwoot_client.get_user(int(cw_user_id))
+            if (existing.get("email") or "").lower().strip() != user_email.lower():
+                needs_heal = True
+        except Exception:
+            needs_heal = True
+
+    if needs_heal and user_email:
+        found = await chatwoot_sso.find_user_by_email_brute_force(user_email)
+        if found:
+            new_uid = found.get("id")
+            new_token = found.get("access_token") or ""
+            account_ids = await chatwoot_sso.get_user_account_ids(new_uid)
+            new_aid = account_ids[0] if account_ids else None
+            update = {}
+            if new_uid:
+                update["chatwoot_user_id"] = new_uid
+            if new_token:
+                update["chatwoot_access_token"] = new_token
+            if new_aid:
+                update["chatwoot_account_id"] = new_aid
+            if update:
+                await db.users.update_one({"id": user["id"]}, {"$set": update})
+            cw_user_id, cw_token, cw_account_id = new_uid, new_token, new_aid
+        else:
+            try:
+                fresh = await chatwoot_client.provision_for_user(user)
+                cw_user_id = fresh["user_id"]
+                cw_account_id = fresh["account_id"]
+                cw_token = fresh.get("access_token", "")
+                await db.users.update_one({"id": user["id"]}, {"$set": {
+                    "chatwoot_user_id": cw_user_id,
+                    "chatwoot_account_id": cw_account_id,
+                    "chatwoot_access_token": cw_token,
+                }})
+            except Exception as e:
+                raise HTTPException(status_code=502, detail=f"chatwoot_account_unrecoverable: {e}")
+
+    if not (cw_user_id and cw_account_id and cw_token):
+        raise HTTPException(status_code=400, detail="chatwoot_account_missing")
+    return {
+        "chatwoot_user_id": cw_user_id,
+        "chatwoot_account_id": cw_account_id,
+        "chatwoot_access_token": cw_token,
+    }
+
+
+@api_router.post("/me/channels/telegram/connect")
+async def connect_telegram(payload: TelegramConnectRequest, user: dict = Depends(_current_user)):
+    """Native Telegram connect — client pastes BotFather token, we create inbox in Chatwoot."""
+    bot_token = (payload.bot_token or "").strip()
+    if not bot_token or ":" not in bot_token:
+        raise HTTPException(status_code=400, detail="invalid_bot_token_format")
+
+    link = await _ensure_chatwoot_link(user)
+    try:
+        inbox = await chatwoot_client.create_telegram_inbox(
+            account_id=int(link["chatwoot_account_id"]),
+            user_token=link["chatwoot_access_token"],
+            bot_token=bot_token,
+            name=payload.name or "Telegram",
+        )
+    except chatwoot_client.ChatwootError as e:
+        msg = str(e)
+        # Surface common BotFather errors in a friendlier way
+        if "Unauthorized" in msg or "401" in msg:
+            raise HTTPException(status_code=400, detail="invalid_bot_token")
+        if "name" in msg.lower() and ("taken" in msg.lower() or "already" in msg.lower()):
+            raise HTTPException(status_code=409, detail="bot_already_connected")
+        raise HTTPException(status_code=502, detail=f"telegram_connect_failed: {msg[:200]}")
+    return {
+        "ok": True,
+        "inbox": chatwoot_sso.normalize_inbox(inbox),
+    }
+
+
+@api_router.delete("/me/channels/telegram/{inbox_id}")
+async def disconnect_telegram(inbox_id: int, user: dict = Depends(_current_user)):
+    link = await _ensure_chatwoot_link(user)
+    try:
+        await chatwoot_client.delete_inbox(
+            account_id=int(link["chatwoot_account_id"]),
+            user_token=link["chatwoot_access_token"],
+            inbox_id=inbox_id,
+        )
+    except chatwoot_client.ChatwootError as e:
+        raise HTTPException(status_code=502, detail=f"disconnect_failed: {e}")
+    return {"ok": True}
+
+
+# ============================
 # Channel SSO Bridge (Hybrid: popup window.open + Polling)
 # Used for Telegram (POC), Facebook, Instagram, Webchat, Email channels
 # ============================
