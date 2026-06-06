@@ -1,86 +1,91 @@
-# SocialHub — Product Requirements Document
+# SocialHub PRD — Updated Feb 2026
 
-## Original Problem Statement
-SaaS marketing website + billing dashboard for an omnichannel customer service platform called **SocialHub** (similar to respond.io). The messaging engine is a self-hosted Chatwoot instance on a Hostinger VPS. The platform requires:
-- Landing page + JWT authentication
-- Client dashboard + Super Admin dashboard
-- Chatwoot integration (auto-provisioning + SSO)
-- WhatsApp Embedded Signup (Meta Cloud API)
-- Local payment gateways (Thawani Pay)
-- AI Auto-reply
-- Email notifications (Resend)
+## Original Problem
+SaaS messaging platform "SocialHub" — landing + billing dashboard for a multi-tenant Chatwoot-powered messaging platform. Arabic-first.
 
-**User language**: Arabic (always respond in Arabic).
+## Current Architecture
+- **Frontend**: React 18 + Tailwind + shadcn/ui
+- **Backend**: FastAPI + Motor (MongoDB) — `socialhub-api.service` (systemd) on VPS / Emergent Deploy
+- **Chatwoot**: Self-hosted on VPS Docker (`/root/docker-compose.yaml`)
+- **Reverse Proxy**: Traefik (host network) — Chatwoot on `letsm.io`, SocialHub on `app.letsm.io`
+- **Deployment**: Production on Emergent Deploy + VPS
 
----
-
-## Architecture
-- **Frontend**: React 18 + Tailwind + shadcn/ui (Emergent preview + deployed to VPS via GitHub Actions)
-- **Backend**: FastAPI + Motor (MongoDB) — runs on VPS as `socialhub-api.service` (systemd)
-- **Chatwoot**: Docker stack at `/root/docker-compose.yaml` (rails + sidekiq + postgres + redis)
-- **Reverse Proxy**: Traefik (replaces Nginx) — listens on host network ports :80/:443
-- **Domains**:
-  - `letsm.io` → Chatwoot (Rails app)
-  - SocialHub frontend on Emergent preview (configured via `REACT_APP_BACKEND_URL`)
-
----
-
-## Completed Features (as of Feb 2026)
-- ✅ JWT auth + brute-force lockout (5 attempts → 15 min)
-- ✅ Chatwoot auto-provisioning on user registration (account + agent user)
-- ✅ Demo WhatsApp inbox + simulate-message feature
-- ✅ WhatsApp Embedded Signup (Meta SDK) — currently mocked pending Meta App Review
-- ✅ WhatsApp BYOK (Bring Your Own Key) — clients paste Meta tokens directly
-- ✅ AI Auto-reply with Dual Provider (Emergent Universal Key OR client's OpenAI key)
-- ✅ Auto-Handoff system (keyword + repeat + AI fallback triggers)
-- ✅ Wallet system + Thawani Pay top-ups
-- ✅ Subscription plans + upgrades
-- ✅ Chatwoot SSO login for clients (locked to `agent` role + CSS injection to hide sidebar)
-- ✅ Webhook fan-out: WhatsApp Meta → Chatwoot + back
-- ✅ Resend email notifications
-- ✅ Super Admin dashboard (clients, broadcasts, analytics)
-- ✅ **Channel SSO Bridge (Telegram POC)** — popup window.open + 3s polling for inbox detection (NEW Feb 2026)
-
----
-
-## Active P0 Task
-**Hybrid SSO + Telegram POC** — DONE on Emergent. Awaiting "Save to GitHub" → VPS deployment → E2E test by user.
-
-Implementation:
-- `backend/chatwoot_sso.py` — generates Chatwoot SSO URLs with `redirect_to` to inbox-creation pages
-- `server.py` — 3 endpoints: `/sso/supported`, `/sso/link`, `/sso/inboxes`
-- `Channels.jsx` — Telegram card + `<ChannelSSOPollingOverlay>` modal
-- Polls Chatwoot inboxes every 3s; closes popup & shows toast when new inbox detected
-
-Env required on VPS: `CHATWOOT_PLATFORM_TOKEN` or `CHATWOOT_PLATFORM_API_KEY` + `CHATWOOT_URL` ✅ done
-
----
+## Completed (cumulative)
+- JWT auth + brute-force lockout
+- Chatwoot auto-provisioning per client (self-healing for stale IDs)
+- AI Auto-reply (Dual Provider: Emergent Universal Key OR client OpenAI)
+- Auto-Handoff (keyword + repeat + AI fallback)
+- WhatsApp BYOK (Phone Number ID + WABA + Access Token)
+- **Telegram BYOK** (native form, no popup)
+- **Facebook Messenger BYOK** (Page ID + Page Access Token) — Feb 2026
+- **Instagram BYOK** (IG Business Account ID + Page Access Token) — Feb 2026
+- Wallet + Thawani Pay
+- Subscription plans
+- Webhook fan-out: WhatsApp Meta → Chatwoot
+- Resend email notifications
+- Super Admin dashboard
+- **Chatwoot Rebrand**: Logo + Brand Name + Title + Favicon all = SocialHub
+- **One-click Rebrand endpoint** `POST /api/admin/chatwoot/rebrand`
+- Custom SocialHub logo + favicon SVG (served from frontend public/)
 
 ## Backlog
-### P1
-- Facebook Messenger + Instagram DMs via SSO modal (needs FB App credentials in Chatwoot)
-- WhatsApp Broadcasts (CSV upload + Meta template messages)
-- WhatsApp Embedded Signup (un-mock once Meta App Review approved)
+### P1 (next sprint)
+- **WhatsApp Broadcasts** — Frontend UI (backend `broadcasts.py` already exists)
+- **Active Conversations admin page** — see who's replying (bot/human), last msg, override
+- **Testing Agent v3** run — full end-to-end test of all flows
+- **Pricing/Billing UX** improvements
 
 ### P2
-- Active Conversations page (admin view: who's replying, last msg, manual override)
+- Refactor `server.py` (now 2400+ lines) → modular routers
 
 ### P3
-- Refactor `server.py` (now 2114 lines) into modular routers (`/routes/whatsapp.py`, `/routes/admin.py`, `/routes/channels.py`)
+- Multi-language email templates
+- White-label per tenant (subdomain branding)
 
----
+## Known Constraints
+- Chatwoot stays on VPS (can't host on Emergent)
+- VPS deployment via GitHub Actions had SSH timeout — manual `git pull` works
+- Browser favicon cache persistent for existing users (auto-refreshes for new visitors)
 
-## Known Infrastructure Issues (NON-CODE)
-- **VPS has multiple competing Docker stacks**: `/root/docker-compose.yaml` (canonical), `/root/chatwoot/` (broken Coolify leftover — disabled with `restart: "no"`), `/opt/letsm/` (production SocialHub backend in docker)
-- **Auto-restart hazard**: If VPS reboots, `unless-stopped` containers from `/root/chatwoot/` may conflict. Workaround: keep `/root/docker-compose.yaml` running and the chatwoot/ folder's restart policy set to "no".
-- **Platform App allowlist**: New Platform App in Chatwoot requires manual permissible-resources setup. User ran `PlatformAppPermissible.find_or_create_by(...)` in Rails console to grant access to all Users + Accounts.
+## Key Environment Variables
+**SocialHub backend** (`/var/www/socialhub/backend/.env` on VPS, also Emergent Secrets):
+```
+MONGO_URL, DB_NAME
+JWT_SECRET, ADMIN_EMAIL, ADMIN_PASSWORD
+CHATWOOT_URL=https://letsm.io
+CHATWOOT_PLATFORM_TOKEN=7ZPmeu...
+EMERGENT_LLM_KEY
+META_WEBHOOK_VERIFY_TOKEN
+RESEND_API_KEY
+THAWANI_API_KEY
+CHATWOOT_SUPER_ADMIN_EMAIL=admin@letsm.io (for rebrand endpoint)
+CHATWOOT_SUPER_ADMIN_PASSWORD=SuperAdmin@2026!
+PUBLIC_APP_URL=https://app.letsm.io
+```
 
----
+**Chatwoot** (`/root/.env` on VPS):
+```
+INSTALLATION_NAME=SocialHub
+BRAND_NAME=SocialHub
+LOGO=https://app.letsm.io/socialhub-logo.svg
+LOGO_THUMBNAIL=https://app.letsm.io/socialhub-logo-thumbnail.svg
+BRAND_URL=https://app.letsm.io
+DEFAULT_LOCALE=ar
+```
+
+## Key Files
+- `backend/server.py` — main FastAPI app (2400+ lines, needs refactoring)
+- `backend/chatwoot_client.py` — Chatwoot REST helpers (create_telegram/facebook/instagram_inbox)
+- `backend/chatwoot_sso.py` — SSO link generation + brute-force user lookup self-heal
+- `backend/whatsapp_byok.py` — WhatsApp BYOK with detailed Meta error mapping
+- `backend/ai_agent.py` — Dual-provider AI + handoff logic
+- `backend/broadcasts.py` — Broadcast worker (UI pending)
+- `frontend/src/pages/(dashboard)/Channels.jsx` — channel connection UI (TG/FB/IG/WA cards)
+- `frontend/public/socialhub-logo.svg` — used by Chatwoot too
+- `frontend/public/favicon.svg`
 
 ## Test Credentials
 See `/app/memory/test_credentials.md`.
 
----
-
 ## Last Updated
-2026-02-06 — Hybrid SSO + Telegram POC built, awaiting deployment + E2E test.
+2026-02-06 — Facebook + Instagram BYOK added. Branding complete.

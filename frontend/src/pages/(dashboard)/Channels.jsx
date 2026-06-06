@@ -448,40 +448,77 @@ export default function Channels() {
         onConnect={async (botToken) => {
           setError("");
           try {
-            const { data } = await api.post("/me/channels/telegram/connect", {
-              bot_token: botToken,
-              name: "Telegram",
-            });
-            // Refresh inbox list to reflect the new connection
+            const { data } = await api.post("/me/channels/telegram/connect", { bot_token: botToken, name: "Telegram" });
             const { data: inb } = await api.get("/me/channels/sso/inboxes");
             setChatwootInboxes(inb.inboxes || []);
-            setToast(
-              lang === "ar"
-                ? `🎉 تم ربط Telegram بنجاح! (${data.inbox?.name || ""})`
-                : `🎉 Telegram connected! (${data.inbox?.name || ""})`
-            );
+            setToast(lang === "ar" ? `🎉 تم ربط Telegram بنجاح! (${data.inbox?.name || ""})` : `🎉 Telegram connected!`);
             setTimeout(() => setToast(""), 6000);
             return { ok: true };
           } catch (e) {
-            const detail = formatApiErrorDetail(e.response?.data?.detail) || e.message;
-            return { ok: false, error: detail };
+            return { ok: false, error: formatApiErrorDetail(e.response?.data?.detail) || e.message };
           }
         }}
         onDisconnect={async (inboxId) => {
-          if (!window.confirm(
-            lang === "ar"
-              ? "سيتم فصل بوت تيليجرام. هل أنت متأكد؟"
-              : "Disconnect Telegram bot. Continue?"
-          )) return;
+          if (!window.confirm(lang === "ar" ? "سيتم فصل بوت تيليجرام. تأكيد؟" : "Disconnect Telegram?")) return;
           try {
             await api.delete(`/me/channels/telegram/${inboxId}`);
             const { data: inb } = await api.get("/me/channels/sso/inboxes");
             setChatwootInboxes(inb.inboxes || []);
             setToast(lang === "ar" ? "تم فصل تيليجرام." : "Telegram disconnected.");
             setTimeout(() => setToast(""), 3000);
-          } catch (e) {
-            setError(formatApiErrorDetail(e.response?.data?.detail) || e.message);
-          }
+          } catch (e) { setError(formatApiErrorDetail(e.response?.data?.detail) || e.message); }
+        }}
+        lang={lang}
+      />
+
+      {/* Facebook Messenger — BYOK */}
+      <MetaChannelCard
+        channel="facebook"
+        connected={chatwootInboxes.some((i) => i.channel_type === "facebook")}
+        existingInbox={chatwootInboxes.find((i) => i.channel_type === "facebook")}
+        onConnect={async (fields) => {
+          try {
+            const { data } = await api.post("/me/channels/facebook/connect", fields);
+            const { data: inb } = await api.get("/me/channels/sso/inboxes");
+            setChatwootInboxes(inb.inboxes || []);
+            setToast(lang === "ar" ? `🎉 تم ربط Facebook بنجاح!` : `🎉 Facebook connected!`);
+            setTimeout(() => setToast(""), 6000);
+            return { ok: true };
+          } catch (e) { return { ok: false, error: formatApiErrorDetail(e.response?.data?.detail) || e.message }; }
+        }}
+        onDisconnect={async (inboxId) => {
+          if (!window.confirm(lang === "ar" ? "سيتم فصل Facebook. تأكيد؟" : "Disconnect Facebook?")) return;
+          await api.delete(`/me/channels/facebook/${inboxId}`);
+          const { data: inb } = await api.get("/me/channels/sso/inboxes");
+          setChatwootInboxes(inb.inboxes || []);
+          setToast(lang === "ar" ? "تم فصل Facebook." : "Facebook disconnected.");
+          setTimeout(() => setToast(""), 3000);
+        }}
+        lang={lang}
+      />
+
+      {/* Instagram — BYOK */}
+      <MetaChannelCard
+        channel="instagram"
+        connected={chatwootInboxes.some((i) => i.channel_type === "instagram")}
+        existingInbox={chatwootInboxes.find((i) => i.channel_type === "instagram")}
+        onConnect={async (fields) => {
+          try {
+            const { data } = await api.post("/me/channels/instagram/connect", fields);
+            const { data: inb } = await api.get("/me/channels/sso/inboxes");
+            setChatwootInboxes(inb.inboxes || []);
+            setToast(lang === "ar" ? `🎉 تم ربط Instagram بنجاح!` : `🎉 Instagram connected!`);
+            setTimeout(() => setToast(""), 6000);
+            return { ok: true };
+          } catch (e) { return { ok: false, error: formatApiErrorDetail(e.response?.data?.detail) || e.message }; }
+        }}
+        onDisconnect={async (inboxId) => {
+          if (!window.confirm(lang === "ar" ? "سيتم فصل Instagram. تأكيد؟" : "Disconnect Instagram?")) return;
+          await api.delete(`/me/channels/instagram/${inboxId}`);
+          const { data: inb } = await api.get("/me/channels/sso/inboxes");
+          setChatwootInboxes(inb.inboxes || []);
+          setToast(lang === "ar" ? "تم فصل Instagram." : "Instagram disconnected.");
+          setTimeout(() => setToast(""), 3000);
         }}
         lang={lang}
       />
@@ -712,6 +749,7 @@ const WhatsAppConnectedCard = ({ channel, onDisconnect, onSimulate, lang }) => {
   // Auto-mode: send a new test message every 45s for up to 5 minutes
   useEffect(() => {
     if (!autoMode) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setAutoSecondsLeft(300); // 5 min
     // Fire one immediately
     onSimulate();
@@ -723,7 +761,6 @@ const WhatsAppConnectedCard = ({ channel, onDisconnect, onSimulate, lang }) => {
     }, 1000);
     const burst = setInterval(() => { onSimulate(); }, 45000);
     return () => { clearInterval(tick); clearInterval(burst); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoMode]);
 
   const connectedAt = channel.connected_at
@@ -1497,8 +1534,156 @@ const TelegramChannelCard = ({ connected, existingInbox, onConnect, onDisconnect
 };
 
 /* ------------------------------------------------------------------ */
-/* SSO Polling Overlay — shown while popup is open                     */
+/* MetaChannelCard — generic BYOK card for Facebook + Instagram         */
 /* ------------------------------------------------------------------ */
+const MetaChannelCard = ({ channel, connected, existingInbox, onConnect, onDisconnect, lang }) => {
+  const [showForm, setShowForm] = useState(false);
+  const [fields, setFields] = useState({ page_id: "", page_access_token: "", instagram_id: "" });
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+
+  const isFB = channel === "facebook";
+  const Icon = isFB ? Facebook : Instagram;
+  const meta = isFB
+    ? { title: lang === "ar" ? "اربط صفحة فيسبوك ماسنجر" : "Connect Facebook Messenger",
+        color: "blue", testid: "facebook",
+        hint: lang === "ar" ? "تحتاج Page ID + Page Access Token من Meta Developer Console" : "Need Page ID + Page Access Token from Meta Developer Console" }
+    : { title: lang === "ar" ? "اربط Instagram Business" : "Connect Instagram Business",
+        color: "pink", testid: "instagram",
+        hint: lang === "ar" ? "تحتاج Instagram Business Account ID + Page Access Token" : "Need Instagram Business Account ID + Page Access Token" };
+
+  if (connected && existingInbox) {
+    return (
+      <Card data-testid={`${meta.testid}-connected-card`} className="rounded-3xl border-stone-200 bg-white">
+        <CardContent className="p-6 flex flex-col md:flex-row md:items-center gap-4">
+          <div className={`w-14 h-14 rounded-2xl flex items-center justify-center flex-shrink-0 ${isFB ? "bg-blue-50 border border-blue-200" : "bg-gradient-to-tr from-pink-50 to-amber-50 border border-pink-200"}`}>
+            <Icon size={26} className={isFB ? "text-blue-600" : "text-pink-600"} />
+          </div>
+          <div className="flex-1">
+            <div className="flex items-center gap-2 mb-1 flex-wrap">
+              <p className="font-semibold text-stone-900">
+                {isFB ? (lang === "ar" ? "Facebook — متصل" : "Facebook — Connected") : (lang === "ar" ? "Instagram — متصل" : "Instagram — Connected")}
+              </p>
+              <Badge className={`text-white text-[10px] ${isFB ? "bg-blue-600 hover:bg-blue-600" : "bg-pink-600 hover:bg-pink-600"}`}>
+                {lang === "ar" ? "نشط" : "ACTIVE"}
+              </Badge>
+            </div>
+            <p className="text-stone-500 text-xs">{existingInbox?.name || "—"}</p>
+          </div>
+          <Button data-testid={`disconnect-${meta.testid}-btn`} onClick={() => onDisconnect(existingInbox.id)} variant="outline" className="rounded-xl h-10 text-red-700 border-red-200 hover:bg-red-50">
+            <Unlink size={14} className="me-2" />
+            {lang === "ar" ? "فصل" : "Disconnect"}
+          </Button>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const handleSubmit = async () => {
+    setError("");
+    const payload = isFB
+      ? { page_id: fields.page_id.trim(), page_access_token: fields.page_access_token.trim() }
+      : { instagram_id: fields.instagram_id.trim(), page_access_token: fields.page_access_token.trim() };
+    if (Object.values(payload).some((v) => !v)) {
+      setError(lang === "ar" ? "املأ كل الحقول" : "Fill all fields");
+      return;
+    }
+    setSubmitting(true);
+    const res = await onConnect(payload);
+    setSubmitting(false);
+    if (res?.ok) {
+      setFields({ page_id: "", page_access_token: "", instagram_id: "" });
+      setShowForm(false);
+    } else {
+      const e = res?.error || "";
+      if (e.includes("invalid_facebook_token") || e.includes("invalid_instagram_token")) {
+        setError(lang === "ar" ? "التوكن غير صحيح" : "Invalid token");
+      } else if (e.includes("already_connected")) {
+        setError(lang === "ar" ? "هذه الصفحة مربوطة مسبقاً" : "Already connected");
+      } else {
+        setError(e);
+      }
+    }
+  };
+
+  const borderClass = isFB ? "border-blue-200 bg-blue-50/30" : "border-pink-200 bg-pink-50/30";
+  const iconBg = isFB ? "bg-blue-100 border-blue-200 text-blue-600" : "bg-gradient-to-tr from-pink-100 to-amber-100 border-pink-200 text-pink-600";
+  const btnClass = isFB ? "bg-blue-600 hover:bg-blue-700" : "bg-gradient-to-r from-pink-500 to-amber-500 hover:from-pink-600 hover:to-amber-600";
+
+  return (
+    <Card data-testid={`${meta.testid}-connect-card`} className={`rounded-3xl ${borderClass}`}>
+      <CardContent className="p-7 space-y-5">
+        <div className="flex items-start gap-4">
+          <div className={`w-14 h-14 rounded-2xl border flex items-center justify-center flex-shrink-0 ${iconBg}`}>
+            <Icon size={28} />
+          </div>
+          <div className="flex-1">
+            <h2 className="font-heading text-xl md:text-2xl font-bold text-stone-900 mb-1">{meta.title}</h2>
+            <p className="text-stone-700 text-sm leading-relaxed">{meta.hint}</p>
+          </div>
+        </div>
+
+        {!showForm ? (
+          <Button data-testid={`open-${meta.testid}-form-btn`} onClick={() => setShowForm(true)} className={`${btnClass} text-white rounded-xl h-12 px-6`}>
+            <Plug className="me-2" size={16} />
+            {lang === "ar" ? "ابدأ الربط" : "Start connection"}
+          </Button>
+        ) : (
+          <div className="rounded-2xl bg-white border border-stone-200 p-5 space-y-4">
+            {!isFB && (
+              <div>
+                <label className="text-sm font-semibold text-stone-800 block mb-2">{lang === "ar" ? "Instagram Business Account ID" : "Instagram Business Account ID"}</label>
+                <input data-testid={`${meta.testid}-ig-id-input`} type="text" value={fields.instagram_id}
+                  onChange={(e) => setFields({ ...fields, instagram_id: e.target.value })}
+                  placeholder="17841405822304914" dir="ltr"
+                  className="w-full px-4 py-3 rounded-xl border border-stone-300 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-pink-500" />
+              </div>
+            )}
+            {isFB && (
+              <div>
+                <label className="text-sm font-semibold text-stone-800 block mb-2">Page ID</label>
+                <input data-testid={`${meta.testid}-page-id-input`} type="text" value={fields.page_id}
+                  onChange={(e) => setFields({ ...fields, page_id: e.target.value })}
+                  placeholder="123456789012345" dir="ltr"
+                  className="w-full px-4 py-3 rounded-xl border border-stone-300 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              </div>
+            )}
+            <div>
+              <label className="text-sm font-semibold text-stone-800 block mb-2">Page Access Token</label>
+              <input data-testid={`${meta.testid}-token-input`} type="text" value={fields.page_access_token}
+                onChange={(e) => setFields({ ...fields, page_access_token: e.target.value })}
+                placeholder="EAA..." dir="ltr"
+                className="w-full px-4 py-3 rounded-xl border border-stone-300 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-stone-500" />
+              <p className="text-xs text-stone-500 mt-2">
+                {lang === "ar"
+                  ? "احصل عليه من Meta Developer Console → Graph API Explorer → اختر الصفحة → Page Access Token"
+                  : "Get from Meta Developer Console → Graph API Explorer → choose page → Page Access Token"}
+              </p>
+            </div>
+            {error && (
+              <div data-testid={`${meta.testid}-form-error`} className="bg-red-50 border border-red-200 rounded-xl p-3 text-sm text-red-800 flex items-start gap-2">
+                <X size={14} className="text-red-600 mt-0.5 flex-shrink-0" />
+                {error}
+              </div>
+            )}
+            <div className="flex gap-3">
+              <Button data-testid={`submit-${meta.testid}-btn`} onClick={handleSubmit} disabled={submitting}
+                className={`${btnClass} text-white rounded-xl h-11 px-6 flex-1`}>
+                {submitting ? <Loader2 className="animate-spin me-2" size={16} /> : <Check className="me-2" size={16} />}
+                {lang === "ar" ? "ربط" : "Connect"}
+              </Button>
+              <Button data-testid={`cancel-${meta.testid}-btn`} onClick={() => { setShowForm(false); setError(""); }} variant="outline" className="rounded-xl h-11">
+                {lang === "ar" ? "إلغاء" : "Cancel"}
+              </Button>
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+};
+
+
 const ChannelSSOPollingOverlay = ({ channel, onCancel, lang }) => (
   <div
     data-testid="sso-polling-overlay"

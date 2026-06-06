@@ -1262,6 +1262,98 @@ async def disconnect_telegram(inbox_id: int, user: dict = Depends(_current_user)
 
 
 # ============================
+# Facebook Messenger BYOK
+# ============================
+class FacebookConnectRequest(BaseModel):
+    page_id: str
+    page_access_token: str
+    user_access_token: str = ""
+    name: str = "Facebook Page"
+
+
+@api_router.post("/me/channels/facebook/connect")
+async def connect_facebook(payload: FacebookConnectRequest, user: dict = Depends(_current_user)):
+    if not (payload.page_id.strip() and payload.page_access_token.strip()):
+        raise HTTPException(status_code=400, detail="missing_page_id_or_token")
+    link = await _ensure_chatwoot_link(user)
+    try:
+        inbox = await chatwoot_client.create_facebook_inbox(
+            account_id=int(link["chatwoot_account_id"]),
+            user_token=link["chatwoot_access_token"],
+            page_id=payload.page_id,
+            page_access_token=payload.page_access_token,
+            user_access_token=payload.user_access_token,
+            name=payload.name,
+        )
+    except chatwoot_client.ChatwootError as e:
+        msg = str(e)
+        if "401" in msg or "Unauthorized" in msg:
+            raise HTTPException(status_code=400, detail="invalid_facebook_token")
+        if "page_id" in msg.lower() and "already" in msg.lower():
+            raise HTTPException(status_code=409, detail="page_already_connected")
+        raise HTTPException(status_code=502, detail=f"facebook_connect_failed: {msg[:200]}")
+    return {"ok": True, "inbox": chatwoot_sso.normalize_inbox(inbox)}
+
+
+@api_router.delete("/me/channels/facebook/{inbox_id}")
+async def disconnect_facebook(inbox_id: int, user: dict = Depends(_current_user)):
+    link = await _ensure_chatwoot_link(user)
+    try:
+        await chatwoot_client.delete_inbox(
+            account_id=int(link["chatwoot_account_id"]),
+            user_token=link["chatwoot_access_token"],
+            inbox_id=inbox_id,
+        )
+    except chatwoot_client.ChatwootError as e:
+        raise HTTPException(status_code=502, detail=f"disconnect_failed: {e}")
+    return {"ok": True}
+
+
+# ============================
+# Instagram BYOK (via Facebook Page)
+# ============================
+class InstagramConnectRequest(BaseModel):
+    instagram_id: str
+    page_access_token: str
+    name: str = "Instagram"
+
+
+@api_router.post("/me/channels/instagram/connect")
+async def connect_instagram(payload: InstagramConnectRequest, user: dict = Depends(_current_user)):
+    if not (payload.instagram_id.strip() and payload.page_access_token.strip()):
+        raise HTTPException(status_code=400, detail="missing_instagram_id_or_token")
+    link = await _ensure_chatwoot_link(user)
+    try:
+        inbox = await chatwoot_client.create_instagram_inbox(
+            account_id=int(link["chatwoot_account_id"]),
+            user_token=link["chatwoot_access_token"],
+            instagram_id=payload.instagram_id,
+            page_access_token=payload.page_access_token,
+            name=payload.name,
+        )
+    except chatwoot_client.ChatwootError as e:
+        msg = str(e)
+        if "401" in msg or "Unauthorized" in msg:
+            raise HTTPException(status_code=400, detail="invalid_instagram_token")
+        raise HTTPException(status_code=502, detail=f"instagram_connect_failed: {msg[:200]}")
+    return {"ok": True, "inbox": chatwoot_sso.normalize_inbox(inbox)}
+
+
+@api_router.delete("/me/channels/instagram/{inbox_id}")
+async def disconnect_instagram(inbox_id: int, user: dict = Depends(_current_user)):
+    link = await _ensure_chatwoot_link(user)
+    try:
+        await chatwoot_client.delete_inbox(
+            account_id=int(link["chatwoot_account_id"]),
+            user_token=link["chatwoot_access_token"],
+            inbox_id=inbox_id,
+        )
+    except chatwoot_client.ChatwootError as e:
+        raise HTTPException(status_code=502, detail=f"disconnect_failed: {e}")
+    return {"ok": True}
+
+
+# ============================
 # Channel SSO Bridge (Hybrid: popup window.open + Polling)
 # Used for Telegram (POC), Facebook, Instagram, Webchat, Email channels
 # ============================

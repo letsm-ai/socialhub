@@ -228,6 +228,56 @@ async def create_telegram_inbox(account_id: int, user_token: str, bot_token: str
         return r.json()
 
 
+async def create_facebook_inbox(
+    account_id: int, user_token: str, page_id: str, page_access_token: str,
+    user_access_token: str = "", name: str = "",
+) -> dict:
+    """POST /api/v1/accounts/{aid}/callbacks/register_facebook_page — Facebook BYOK."""
+    payload = {
+        "name": name or "Facebook Page",
+        "channel": {
+            "type": "facebook",
+            "page_id": page_id.strip(),
+            "page_access_token": page_access_token.strip(),
+            "user_access_token": (user_access_token or page_access_token).strip(),
+        },
+    }
+    async with httpx.AsyncClient(timeout=25.0) as cx:
+        r = await cx.post(
+            f"{_base()}/api/v1/accounts/{account_id}/inboxes",
+            headers=_app_headers(user_token),
+            json=payload,
+        )
+        if r.status_code >= 400:
+            raise ChatwootError(f"create_facebook_inbox {r.status_code}: {r.text}")
+        return r.json()
+
+
+async def create_instagram_inbox(
+    account_id: int, user_token: str, instagram_id: str, page_access_token: str,
+    name: str = "",
+) -> dict:
+    """POST /api/v1/accounts/{aid}/inboxes — Instagram (via Facebook Page) BYOK.
+    instagram_id = the Instagram Business Account ID linked to the Facebook Page."""
+    payload = {
+        "name": name or "Instagram",
+        "channel": {
+            "type": "instagram",
+            "instagram_id": instagram_id.strip(),
+            "page_access_token": page_access_token.strip(),
+        },
+    }
+    async with httpx.AsyncClient(timeout=25.0) as cx:
+        r = await cx.post(
+            f"{_base()}/api/v1/accounts/{account_id}/inboxes",
+            headers=_app_headers(user_token),
+            json=payload,
+        )
+        if r.status_code >= 400:
+            raise ChatwootError(f"create_instagram_inbox {r.status_code}: {r.text}")
+        return r.json()
+
+
 async def delete_inbox(account_id: int, user_token: str, inbox_id: int) -> None:
     async with httpx.AsyncClient(timeout=15.0) as cx:
         r = await cx.delete(
