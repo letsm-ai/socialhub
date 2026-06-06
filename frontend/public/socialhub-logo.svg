@@ -1,0 +1,18 @@
+<svg width="240" height="60" viewBox="0 0 240 60" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#047857"/>
+      <stop offset="100%" style="stop-color:#064E3B"/>
+    </linearGradient>
+  </defs>
+  <!-- Icon box -->
+  <rect x="6" y="10" width="40" height="40" rx="10" fill="url(#bgGrad)"/>
+  <!-- MessagesSquare icon (simplified) -->
+  <path d="M14 22 L38 22 L38 36 L26 36 L20 42 L20 36 L14 36 Z"
+        fill="none" stroke="#FBBF24" stroke-width="2.5" stroke-linejoin="round"/>
+  <!-- Wordmark -->
+  <text x="56" y="38" font-family="Inter, system-ui, sans-serif"
+        font-size="22" font-weight="700" fill="#1C1917" letter-spacing="-0.5">
+    SocialHub
+  </text>
+</svg>
