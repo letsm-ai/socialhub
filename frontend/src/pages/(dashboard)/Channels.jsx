@@ -321,7 +321,7 @@ export default function Channels() {
       try {
         const { data: snap } = await api.get("/me/channels/sso/inboxes");
         baselineIds = (snap.inboxes || []).map((i) => i.id);
-      } catch (_) { /* ignore — first connect */ }
+      } catch (e) { /* first connect: no baseline yet */ console.debug("baseline empty:", e?.message); }
 
       const { data } = await api.post("/me/channels/sso/link", { channel });
       const popup = window.open(
@@ -383,7 +383,7 @@ export default function Channels() {
   useEffect(() => {
     api.get("/me/channels/sso/inboxes").then(({ data }) => {
       setChatwootInboxes(data.inboxes || []);
-    }).catch(() => { /* ignore */ });
+    }).catch((e) => { console.debug("inboxes prefetch failed:", e?.message); });
   }, []);
 
   return (
