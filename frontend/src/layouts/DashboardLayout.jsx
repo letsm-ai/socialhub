@@ -28,8 +28,10 @@ export default function DashboardLayout() {
         window.open(data.sso_url, "_blank", "noopener,noreferrer");
         return;
       }
-    } catch (_) { /* fallthrough */ }
-    window.open("https://inbox.letsm.io", "_blank", "noopener,noreferrer");
+    } catch (err) {
+      console.warn("SSO failed, falling back to plain URL:", err?.message);
+    }
+    window.open("https://letsm.io/app", "_blank", "noopener,noreferrer");
   };
 
   const navItems = [

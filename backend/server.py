@@ -6,6 +6,7 @@ ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
 import os
+import httpx
 import logging
 import uuid
 import asyncio
@@ -570,6 +571,105 @@ async def my_chatwoot_sso(user: dict = Depends(_current_user)):
     except Exception as e:
         logger.exception("SSO generation failed")
         raise HTTPException(status_code=502, detail=f"Failed to generate Chatwoot login URL: {e}")
+
+
+@api_router.post("/admin/chatwoot/rebrand")
+async def admin_chatwoot_rebrand(admin: dict = Depends(_current_admin)):
+    """
+    One-click Chatwoot Rebrand — pushes SocialHub branding into Chatwoot's
+    InstallationConfig table via Super Admin login.
+
+    Updates: INSTALLATION_NAME, BRAND_NAME, LOGO, LOGO_THUMBNAIL, LOGO_DARK,
+    BRAND_URL, WIDGET_BRAND_URL.
+
+    Requires CHATWOOT_SUPER_ADMIN_EMAIL + CHATWOOT_SUPER_ADMIN_PASSWORD env vars
+    (these are the credentials of the Super Admin account in /super_admin/).
+    """
+    base = (os.environ.get("CHATWOOT_URL") or "").rstrip("/")
+    email = os.environ.get("CHATWOOT_SUPER_ADMIN_EMAIL", "").strip()
+    password = os.environ.get("CHATWOOT_SUPER_ADMIN_PASSWORD", "").strip()
+    if not (base and email and password):
+        raise HTTPException(
+            status_code=400,
+            detail="rebrand_not_configured: set CHATWOOT_SUPER_ADMIN_EMAIL + CHATWOOT_SUPER_ADMIN_PASSWORD in backend .env",
+        )
+
+    public_url = (os.environ.get("PUBLIC_APP_URL") or "https://app.letsm.io").rstrip("/")
+    desired = {
+        "INSTALLATION_NAME": "SocialHub",
+        "BRAND_NAME": "SocialHub",
+        "LOGO": f"{public_url}/socialhub-logo.svg",
+        "LOGO_THUMBNAIL": f"{public_url}/socialhub-logo-thumbnail.svg",
+        "LOGO_DARK": f"{public_url}/socialhub-logo.svg",
+        "BRAND_URL": public_url,
+        "WIDGET_BRAND_URL": public_url,
+    }
+
+    async with httpx.AsyncClient(timeout=20.0, follow_redirects=False) as cx:
+        # 1. Get CSRF token from sign-in page
+        r1 = await cx.get(f"{base}/super_admin/sign_in")
+        if r1.status_code >= 400:
+            raise HTTPException(status_code=502, detail=f"super_admin_unreachable: {r1.status_code}")
+        import re
+        m = re.search(r'name="authenticity_token"\s+value="([^"]+)"', r1.text)
+        if not m:
+            raise HTTPException(status_code=502, detail="csrf_token_not_found")
+        csrf = m.group(1)
+        cookies = dict(r1.cookies)
+
+        # 2. Sign in
+        r2 = await cx.post(
+            f"{base}/super_admin/sign_in",
+            cookies=cookies,
+            data={
+                "authenticity_token": csrf,
+                "super_admin[email]": email,
+                "super_admin[password]": password,
+                "commit": "Log in",
+            },
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        if r2.status_code not in (302, 303):
+            raise HTTPException(
+                status_code=502,
+                detail=f"super_admin_login_failed: status={r2.status_code} — check email/password",
+            )
+        cookies.update(dict(r2.cookies))
+
+        # 3. Update each setting via Super Admin form endpoint
+        results = []
+        for name, value in desired.items():
+            # Refresh CSRF (settings form has its own token)
+            page = await cx.get(f"{base}/super_admin/settings", cookies=cookies)
+            mt = re.search(r'name="authenticity_token"\s+value="([^"]+)"', page.text)
+            if not mt:
+                results.append({"name": name, "ok": False, "error": "csrf_missing_on_settings"})
+                continue
+            csrf2 = mt.group(1)
+            cookies.update(dict(page.cookies))
+
+            patch = await cx.post(
+                f"{base}/super_admin/settings/{name}",
+                cookies=cookies,
+                data={
+                    "_method": "patch",
+                    "authenticity_token": csrf2,
+                    "installation_config[value]": value,
+                    "commit": "Update",
+                },
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+            ok = patch.status_code in (302, 303, 200)
+            results.append({"name": name, "ok": ok, "status": patch.status_code})
+
+    success_count = sum(1 for r in results if r["ok"])
+    return {
+        "ok": success_count == len(desired),
+        "updated": success_count,
+        "total": len(desired),
+        "details": results,
+        "note": "Logo + brand updates apply immediately. Tab title + favicon require docker exec on VPS (see CHATWOOT_REBRAND.md).",
+    }
 
 
 @api_router.post("/admin/chatwoot/heal")
